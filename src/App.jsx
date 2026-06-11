@@ -115,6 +115,55 @@ const fmpFetchProfile = async (symbol, apiKey) => {
   return null;
 };
 
+// ═══════════════════ EXTERNAL API SERVICES ═══════════════════
+const FRED_KEY = "07a98309feadf15506ac4004b1d66492";
+const NEWSAPI_KEY = "6150d75a436e482aa42d48e7d0c8a765";
+
+const fetchSentiment = async (symbol) => {
+  try {
+    const r = await fetch(`https://api.stocktwits.com/api/2/streams/symbol/${symbol}.json`, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error("StockTwits " + r.status);
+    const d = await r.json();
+    const msgs = d.messages || [];
+    const sym = d.symbol || {};
+    let bullish = 0, bearish = 0;
+    const recentPosts = [];
+    for (const m of msgs) {
+      const s = m.entities?.sentiment?.basic;
+      if (s === "Bullish") bullish++;
+      else if (s === "Bearish") bearish++;
+      if (recentPosts.length < 8) recentPosts.push({ body: (m.body || "").slice(0, 120), sentiment: s || "Neutral", time: (m.created_at || "").slice(0, 16) });
+    }
+    const total = msgs.length || 1;
+    return { ok: true, count: msgs.length, watchlist: sym.watchlist_count || 0, bullish, bearish, neutral: total - bullish - bearish, bullPct: Math.round(bullish / total * 100), bearPct: Math.round(bearish / total * 100), direction: Math.round(bullish / total * 100) > 60 ? "偏多" : Math.round(bearish / total * 100) > 60 ? "偏空" : "中性", crowdedness: msgs.length > 25 ? "高" : msgs.length > 15 ? "中" : "低", strength: msgs.length > 20 ? "中" : "低", recentPosts, source: "StockTwits 公开API" };
+  } catch (e) { return { ok: false, error: e.message, count: 0, bullish: 0, bearish: 0, bullPct: 0, bearPct: 0, watchlist: 0, recentPosts: [], source: "StockTwits (失败)" }; }
+};
+
+const fetchMacro = async () => {
+  try {
+    const [r10y, rFF] = await Promise.all([
+      fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=DGS10&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=5`, { signal: AbortSignal.timeout(8000) }),
+      fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=FEDFUNDS&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`, { signal: AbortSignal.timeout(8000) }),
+    ]);
+    const d10y = await r10y.json(); const dFF = await rFF.json();
+    const y10 = d10y.observations?.[0] || {};
+    const ff = dFF.observations?.[0] || {};
+    const y10prev = d10y.observations?.[4] || {};
+    const chg = y10prev.value && y10.value ? ((parseFloat(y10.value) - parseFloat(y10prev.value)) * 100).toFixed(0) + "bp" : "N/A";
+    return { ok: true, yield10y: y10.value ? parseFloat(y10.value).toFixed(2) + "%" : "N/A", yield10yDate: y10.date || "", yield10yChg: chg + " (5日)", fedFunds: ff.value ? parseFloat(ff.value).toFixed(2) + "%" : "N/A", source: "FRED API" };
+  } catch (e) { return { ok: false, yield10y: "N/A", fedFunds: "N/A", error: e.message, source: "FRED (失败)" }; }
+};
+
+const fetchNews = async (query) => {
+  try {
+    const r = await fetch(`https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&sortBy=publishedAt&pageSize=10&language=en&apiKey=${NEWSAPI_KEY}`, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error("NewsAPI " + r.status);
+    const d = await r.json();
+    const articles = (d.articles || []).slice(0, 8).map(a => ({ title: (a.title || "").slice(0, 100), source: a.source?.name || "?", date: (a.publishedAt || "").slice(0, 10), url: a.url || "#" }));
+    return { ok: true, total: d.totalResults || 0, articles, source: "NewsAPI.org" };
+  } catch (e) { return { ok: false, total: 0, articles: [], error: e.message, source: "NewsAPI (失败)" }; }
+};
+
 // ═══════════════════ FMP PROFILE → ANALYSIS FORMAT ═══════════════════
 const mergeLiveWithPreset = (ticker, prof) => {
   const p = prof;
@@ -366,9 +415,17 @@ function runAnalysis(ticker, stockData, dataSource) {
     { dim: "安全边际", val: Math.min(100, Math.abs(priceVs52h) * 1.5) },
   ];
 
+  // Support/Resistance via Classic Pivot + ATR
+  const last = prices[prices.length - 1];
+  const pivot = (last.high + last.low + last.close) / 3;
+  const s1 = +(2 * pivot - last.high).toFixed(2), r1 = +(2 * pivot - last.low).toFixed(2);
+  const s2 = +(pivot - (last.high - last.low)).toFixed(2), r2 = +(pivot + (last.high - last.low)).toFixed(2);
+  const s3 = +(last.low - 2 * (last.high - pivot)).toFixed(2), r3 = +(last.high + 2 * (pivot - last.low)).toFixed(2);
+
   return {
     ticker, ...p, prices, chartData, closes, dataSource,
-    tech: { sma20: curSMA20, sma50: curSMA50, sma200: curSMA200, ema10: ema10[ema10.length - 1], rsi: curRSI, macd: curMACD, signal: curSignal, hist: macdHist, atr: curATR, atrPct, avgVol, signals, priceVs52h, priceVsSMA200 },
+    tech: { sma20: curSMA20, sma50: curSMA50, sma200: curSMA200, ema10: ema10[ema10.length - 1], rsi: curRSI, macd: curMACD, signal: curSignal, hist: macdHist, atr: curATR, atrPct, avgVol, signals, priceVs52h, priceVsSMA200,
+      levels: { pivot: +pivot.toFixed(2), s1, s2, s3, r1, r2, r3 } },
     fundScore, techScore, radarData,
     pos: { target: posTarget, overAlloc, entries, triggers },
   };
@@ -426,13 +483,19 @@ export default function StockAnalysisTool() {
   const [result, setResult] = useState(null);
   const [apiKey, setApiKey] = useState(DEFAULT_KEY);
   const [showKey, setShowKey] = useState(false);
+  const [sentiment, setSentiment] = useState(null);
+  const [macro, setMacro] = useState(null);
+  const [news, setNews] = useState(null);
+  const [dataStatus, setDataStatus] = useState([]);
 
   const doAnalyze = useCallback(async (ticker) => {
     const t = ticker.trim().toUpperCase();
     if (!t) return;
     setLoading(true); setError(""); setActiveTicker(t); setTab("overview");
+    setSentiment(null); setMacro(null); setNews(null); setDataStatus([]);
 
     let stockData = null, dataSource = "demo";
+    const status = [];
 
     // 1. Try FMP profile API for live price data
     if (apiKey) {
@@ -462,6 +525,30 @@ export default function StockAnalysisTool() {
 
     const analysis = runAnalysis(t, stockData, dataSource);
     setResult(analysis);
+
+    // 4. Fetch external data (sentiment, macro, news) in parallel
+    status.push({ name: "FMP 行情", ok: dataSource === "live", note: dataSource === "live" ? "实时价格/52周/市值" : "预设数据" });
+    status.push({ name: "技术指标", ok: true, note: "本地计算 (SMA/EMA/RSI/MACD/ATR)" });
+
+    const [sent, mac, nws] = await Promise.all([
+      fetchSentiment(t),
+      fetchMacro(),
+      fetchNews(stockData.name?.split(" ")[0] || t),
+    ]);
+
+    setSentiment(sent);
+    status.push({ name: "社交情绪", ok: sent.ok, note: sent.ok ? `StockTwits ${sent.count}帖, Bullish ${sent.bullPct}%` : sent.error });
+
+    setMacro(mac);
+    status.push({ name: "宏观数据", ok: mac.ok, note: mac.ok ? `10Y ${mac.yield10y}, FedFunds ${mac.fedFunds}` : mac.error });
+
+    setNews(nws);
+    status.push({ name: "新闻", ok: nws.ok, note: nws.ok ? `${nws.total}条相关新闻` : nws.error });
+
+    status.push({ name: "财务报表", ok: false, note: "需FMP付费套餐 (预设数据)" });
+    status.push({ name: "分析师预测", ok: false, note: "需FMP付费套餐" });
+
+    setDataStatus(status);
     setLoading(false);
   }, [apiKey]);
 
@@ -479,7 +566,7 @@ export default function StockAnalysisTool() {
       {/* HEADER */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
         <span style={{ fontSize: 22, fontWeight: 800, color: T.blue }}>StockAnalyzer</span>
-        <span style={{ fontSize: 12, color: T.dim, background: T.card, padding: "2px 8px", borderRadius: 4 }}>v2.0</span>
+        <span style={{ fontSize: 12, color: T.dim, background: T.card, padding: "2px 8px", borderRadius: 4 }}>v2.1</span>
         <span style={{ fontSize: 11, color: T.dim }}>多维度股票监测评估系统</span>
         {result && <Badge text={result.dataSource === "live" ? "实时行情 + 预设财务" : "演示数据"} color={result.dataSource === "live" ? T.green : T.yellow} />}
       </div>
@@ -528,8 +615,8 @@ export default function StockAnalysisTool() {
       {loading && (
         <Card style={{ textAlign: "center", padding: 40 }}>
           <div style={{ fontSize: 30, marginBottom: 12, animation: "spin 1s linear infinite" }}>&#x23F3;</div>
-          <div style={{ fontSize: 15, color: T.muted }}>正在从 FMP 获取 {input} 的实时行情...</div>
-          <div style={{ fontSize: 11, color: T.dim, marginTop: 6 }}>价格 · 52周区间 · 市值 · 成交量 · 股息</div>
+          <div style={{ fontSize: 15, color: T.muted }}>正在分析 {input} ...</div>
+          <div style={{ fontSize: 11, color: T.dim, marginTop: 6 }}>FMP 行情 · StockTwits 情绪 · FRED 宏观 · NewsAPI 新闻 · 技术指标计算</div>
         </Card>
       )}
 
@@ -658,6 +745,53 @@ export default function StockAnalysisTool() {
                   </div>
                 </Card>
               </div>
+              {/* Macro Context */}
+              {macro && (
+                <Card style={{ marginTop: 16 }}>
+                  <SectionTitle icon="&#x1F310;">宏观环境 (Macro Context)</SectionTitle>
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ background: T.cardAlt, padding: "10px 16px", borderRadius: 8, flex: "1 1 140px" }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>10Y 美债收益率</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: T.text }}>{macro.ok ? macro.yield10y : "N/A"}</div>
+                      <div style={{ fontSize: 11, color: T.dim }}>{macro.ok ? `${macro.yield10yDate} · ${macro.yield10yChg}` : macro.error}</div>
+                    </div>
+                    <div style={{ background: T.cardAlt, padding: "10px 16px", borderRadius: 8, flex: "1 1 140px" }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>Fed Funds Rate</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: T.text }}>{macro.ok ? macro.fedFunds : "N/A"}</div>
+                      <div style={{ fontSize: 11, color: T.dim }}>{macro.ok ? macro.source : ""}</div>
+                    </div>
+                    <div style={{ background: T.cardAlt, padding: "10px 16px", borderRadius: 8, flex: "2 1 260px" }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>宏观解读</div>
+                      <div style={{ fontSize: 12, color: T.text, lineHeight: 1.6 }}>
+                        {macro.ok
+                          ? (parseFloat(macro.yield10y) > 4.2
+                              ? "利率偏高，成长股估值承压，利好高现金流/低估值标的"
+                              : parseFloat(macro.yield10y) > 3.5
+                                ? "利率中性偏高，关注利率走向对估值的影响"
+                                : "利率偏低，利好成长股和高beta标的")
+                          : "宏观数据暂不可用"}
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              )}
+
+              {/* Recent News */}
+              {news && news.ok && news.articles.length > 0 && (
+                <Card style={{ marginTop: 16 }}>
+                  <SectionTitle icon="&#x1F4F0;">近期新闻 ({news.total}条相关)</SectionTitle>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {news.articles.slice(0, 5).map((a, i) => (
+                      <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 10px", background: T.cardAlt, borderRadius: 8 }}>
+                        <span style={{ fontSize: 11, color: T.blue, fontWeight: 700, minWidth: 70, flexShrink: 0 }}>{a.source}</span>
+                        <a href={a.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13, color: T.text, textDecoration: "none", lineHeight: 1.5, flex: 1 }}>{a.title}</a>
+                        <span style={{ fontSize: 11, color: T.dim, flexShrink: 0 }}>{a.date}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 11, color: T.dim, marginTop: 8 }}>来源: {news.source} · 仅供参考</div>
+                </Card>
+              )}
             </div>
           )}
 
@@ -820,6 +954,32 @@ export default function StockAnalysisTool() {
                   ))}
                 </div>
               </Card>
+              {/* Support / Resistance Levels */}
+              {result.tech.levels && (
+                <Card style={{ marginTop: 16 }}>
+                  <SectionTitle icon="&#x1F4CF;">支撑 & 阻力位 (Pivot + ATR)</SectionTitle>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 10 }}>
+                    {[
+                      { l: "S3 (强支撑)", v: result.cur + result.tech.levels.s3?.toFixed(1), c: T.green, dist: ((result.price - result.tech.levels.s3) / result.price * 100).toFixed(1) + "%" },
+                      { l: "S2 (支撑)", v: result.cur + result.tech.levels.s2?.toFixed(1), c: T.green, dist: ((result.price - result.tech.levels.s2) / result.price * 100).toFixed(1) + "%" },
+                      { l: "S1 (弱支撑)", v: result.cur + result.tech.levels.s1?.toFixed(1), c: T.green, dist: ((result.price - result.tech.levels.s1) / result.price * 100).toFixed(1) + "%" },
+                      { l: "Pivot", v: result.cur + result.tech.levels.pivot?.toFixed(1), c: T.blue, dist: "-" },
+                      { l: "R1 (弱阻力)", v: result.cur + result.tech.levels.r1?.toFixed(1), c: T.red, dist: ((result.tech.levels.r1 - result.price) / result.price * 100).toFixed(1) + "%" },
+                      { l: "R2 (阻力)", v: result.cur + result.tech.levels.r2?.toFixed(1), c: T.red, dist: ((result.tech.levels.r2 - result.price) / result.price * 100).toFixed(1) + "%" },
+                      { l: "R3 (强阻力)", v: result.cur + result.tech.levels.r3?.toFixed(1), c: T.red, dist: ((result.tech.levels.r3 - result.price) / result.price * 100).toFixed(1) + "%" },
+                    ].map((lv, i) => (
+                      <div key={i} style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8, borderLeft: `3px solid ${lv.c}`, textAlign: "center" }}>
+                        <div style={{ fontSize: 11, color: T.muted }}>{lv.l}</div>
+                        <div style={{ fontSize: 18, fontWeight: 700, color: lv.c }}>{lv.v}</div>
+                        <div style={{ fontSize: 10, color: T.dim }}>{lv.dist !== "-" ? `距现价 ${lv.dist}` : "枢轴点"}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 10, fontSize: 11, color: T.dim }}>
+                    经典 Pivot 计算: P = (H+L+C)/3 · 证据强度: <Badge text="中" color={T.yellow} /> (基于日线级别)
+                  </div>
+                </Card>
+              )}
             </div>
           )}
 
@@ -872,61 +1032,120 @@ export default function StockAnalysisTool() {
           {tab === "sentiment" && (
             <div>
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
-                <Card style={{ flex: "1 1 280px", minWidth: 260 }}>
-                  <SectionTitle icon="&#x1F4AC;">社交舆情热度</SectionTitle>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                    {[
-                      { l: "Reddit 讨论热度", v: result.sent.reddit },
-                      { l: "StockTwits 关注度", v: result.sent.stocktwits },
-                      { l: "Google 搜索趋势", v: result.sent.trend },
-                      { l: "综合讨论指数", v: result.sent.buzz },
-                    ].map((s, i) => (
-                      <div key={i}>
-                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: T.muted, marginBottom: 4 }}>
-                          <span>{s.l}</span><span style={{ color: s.v > 60 ? T.green : s.v > 30 ? T.yellow : T.dim, fontWeight: 700 }}>{s.v}</span>
+                {/* StockTwits Real Sentiment */}
+                <Card style={{ flex: "1 1 320px", minWidth: 280 }}>
+                  <SectionTitle icon="&#x1F4AC;">社交情绪 (StockTwits)</SectionTitle>
+                  {sentiment ? (
+                    sentiment.ok ? (
+                      <>
+                        <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+                          <div style={{ flex: 1, background: T.green + "15", border: `1px solid ${T.green}33`, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
+                            <div style={{ fontSize: 24, fontWeight: 800, color: T.green }}>{sentiment.bullPct}%</div>
+                            <div style={{ fontSize: 11, color: T.muted }}>Bullish ({sentiment.bullish}帖)</div>
+                          </div>
+                          <div style={{ flex: 1, background: T.red + "15", border: `1px solid ${T.red}33`, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
+                            <div style={{ fontSize: 24, fontWeight: 800, color: T.red }}>{sentiment.bearPct}%</div>
+                            <div style={{ fontSize: 11, color: T.muted }}>Bearish ({sentiment.bearish}帖)</div>
+                          </div>
+                          <div style={{ flex: 1, background: T.blue + "15", border: `1px solid ${T.blue}33`, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
+                            <div style={{ fontSize: 24, fontWeight: 800, color: T.blue }}>{sentiment.count}</div>
+                            <div style={{ fontSize: 11, color: T.muted }}>总帖子</div>
+                          </div>
                         </div>
-                        <div style={{ height: 6, background: T.border, borderRadius: 3, overflow: "hidden" }}>
-                          <div style={{ width: `${s.v}%`, height: "100%", background: s.v > 60 ? T.green : s.v > 30 ? T.yellow : T.dim, borderRadius: 3, transition: "width 0.5s" }} />
+                        <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+                          <div style={{ background: T.cardAlt, padding: "8px 12px", borderRadius: 8, flex: 1 }}>
+                            <div style={{ fontSize: 11, color: T.muted }}>情绪方向</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: sentiment.direction === "偏多" ? T.green : sentiment.direction === "偏空" ? T.red : T.yellow }}>{sentiment.direction}</div>
+                          </div>
+                          <div style={{ background: T.cardAlt, padding: "8px 12px", borderRadius: 8, flex: 1 }}>
+                            <div style={{ fontSize: 11, color: T.muted }}>讨论热度</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{sentiment.crowdedness}</div>
+                          </div>
+                          <div style={{ background: T.cardAlt, padding: "8px 12px", borderRadius: 8, flex: 1 }}>
+                            <div style={{ fontSize: 11, color: T.muted }}>Watchlist</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{sentiment.watchlist || "-"}</div>
+                          </div>
                         </div>
+                        {/* Sentiment bar */}
+                        <div style={{ height: 10, display: "flex", borderRadius: 5, overflow: "hidden", marginBottom: 6 }}>
+                          <div style={{ width: `${sentiment.bullPct}%`, background: T.green, transition: "width 0.5s" }} />
+                          <div style={{ width: `${100 - sentiment.bullPct - sentiment.bearPct}%`, background: T.dim, transition: "width 0.5s" }} />
+                          <div style={{ width: `${sentiment.bearPct}%`, background: T.red, transition: "width 0.5s" }} />
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: T.dim }}>
+                          <span>Bullish {sentiment.bullPct}%</span><span>Neutral</span><span>Bearish {sentiment.bearPct}%</span>
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ padding: 16, textAlign: "center", color: T.muted }}>
+                        <div style={{ fontSize: 20, marginBottom: 6 }}>&#x26A0;</div>
+                        <div>StockTwits 数据获取失败</div>
+                        <div style={{ fontSize: 11, color: T.dim }}>{sentiment.error} · 可能该股票在 StockTwits 无数据</div>
                       </div>
-                    ))}
-                  </div>
-                  <div style={{ marginTop: 14, padding: "8px 12px", background: T.cardAlt, borderRadius: 8, fontSize: 12, color: T.muted }}>
-                    舆情评级: <b style={{ color: T.yellow }}>{result.sent.rating}</b>
-                    {result.dataSource === "demo" && <span style={{ color: T.dim, marginLeft: 8 }}>(演示数据)</span>}
-                  </div>
+                    )
+                  ) : (
+                    <div style={{ padding: 16, textAlign: "center", color: T.dim, fontSize: 12 }}>加载中...</div>
+                  )}
+                  <div style={{ marginTop: 10, fontSize: 10, color: T.dim }}>来源: {sentiment?.source || "StockTwits 公开API"} · 证据强度: <Badge text={sentiment?.strength || "低"} color={sentiment?.strength === "中" ? T.yellow : T.dim} /></div>
                 </Card>
+
+                {/* Recent StockTwits Posts */}
                 <Card style={{ flex: "1 1 350px", minWidth: 280 }}>
-                  <SectionTitle icon="&#x26A0;&#xFE0F;">核心风险因素</SectionTitle>
+                  <SectionTitle icon="&#x1F4E8;">最新帖子</SectionTitle>
+                  {sentiment?.recentPosts?.length > 0 ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+                      {sentiment.recentPosts.map((p, i) => (
+                        <div key={i} style={{ padding: "8px 10px", background: T.cardAlt, borderRadius: 6, borderLeft: `3px solid ${p.sentiment === "Bullish" ? T.green : p.sentiment === "Bearish" ? T.red : T.dim}` }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                            <Badge text={p.sentiment === "Bullish" ? "Bull" : p.sentiment === "Bearish" ? "Bear" : "Neutral"} color={p.sentiment === "Bullish" ? T.green : p.sentiment === "Bearish" ? T.red : T.dim} />
+                            <span style={{ fontSize: 10, color: T.dim }}>{p.time}</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.5 }}>{p.body}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ padding: 16, textAlign: "center", color: T.dim, fontSize: 12 }}>暂无帖子数据</div>
+                  )}
+                </Card>
+              </div>
+
+              {/* Risks */}
+              <Card style={{ marginBottom: 16 }}>
+                <SectionTitle icon="&#x26A0;&#xFE0F;">核心风险因素</SectionTitle>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {result.risks.map((r, i) => (
-                    <div key={i} style={{ padding: "12px 0", borderBottom: i < result.risks.length - 1 ? `1px solid ${T.border}` : "none" }}>
+                    <div key={i} style={{ padding: "12px 14px", background: T.cardAlt, borderRadius: 8, borderLeft: `3px solid ${r.l.includes("高") ? T.red : r.l.includes("中") ? T.yellow : T.green}` }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                         <span style={{ fontSize: 14, fontWeight: 700, color: T.text }}>{r.t}</span>
-                        <RiskBadge level={r.l} />
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <RiskBadge level={r.l} />
+                          <Badge text="证据: 中" color={T.yellow} />
+                        </div>
                       </div>
                       <div style={{ fontSize: 13, color: T.muted, lineHeight: 1.6 }}>{r.d}</div>
                     </div>
                   ))}
-                </Card>
-              </div>
-              <Card>
-                <SectionTitle icon="&#x1F50E;">数据透明度</SectionTitle>
-                <div style={{ fontSize: 13, color: T.muted, lineHeight: 1.8 }}>
-                  数据来源: {result.dataSource === "live"
-                    ? "Financial Modeling Prep API (实时行情/价格/52周/市值/成交量) · 预设财务数据库 (PE/营收/利润等) · 技术指标由实时价格+Beta计算"
-                    : "演示数据集 (预设财务数据 + 模拟价格) · 技术指标由模拟价格计算"}
                 </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                  {[
-                    { l: "实时行情", ok: result.dataSource === "live" },
-                    { l: "实时52周/市值", ok: result.dataSource === "live" },
-                    { l: "财务报表", ok: false },
-                    { l: "技术指标", ok: true },
-                    { l: "分析师预测", ok: false },
-                    { l: "社交舆情", ok: false },
-                  ].map((s, i) => (
-                    <Badge key={i} text={(s.ok ? "✓ " : "○ ") + s.l} color={s.ok ? T.green : T.dim} />
-                  ))}
+              </Card>
+
+              {/* Data Status Table */}
+              <Card>
+                <SectionTitle icon="&#x1F50E;">数据采集状态</SectionTitle>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {dataStatus.length > 0 ? dataStatus.map((s, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: T.cardAlt, borderRadius: 6 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: 4, background: s.ok ? T.green : T.dim, flexShrink: 0 }} />
+                      <span style={{ fontSize: 13, fontWeight: 600, color: T.text, minWidth: 90 }}>{s.name}</span>
+                      <span style={{ fontSize: 12, color: T.muted, flex: 1 }}>{s.note}</span>
+                      <Badge text={s.ok ? "已获取" : "不可用"} color={s.ok ? T.green : T.dim} />
+                    </div>
+                  )) : (
+                    <div style={{ padding: 12, color: T.dim, fontSize: 12 }}>分析完成后显示数据采集状态...</div>
+                  )}
+                </div>
+                <div style={{ marginTop: 12, padding: "8px 12px", background: T.yellow + "15", border: `1px solid ${T.yellow}33`, borderRadius: 6, fontSize: 11, color: T.yellow }}>
+                  FMP 免费套餐仅支持实时行情(Profile)。财务报表/历史价格/分析师预测需升级付费套餐后启用。
                 </div>
               </Card>
             </div>
@@ -935,38 +1154,139 @@ export default function StockAnalysisTool() {
           {/* ═══ REPORT ═══ */}
           {tab === "report" && (
             <Card style={{ fontFamily: "'SF Mono', 'Fira Code', monospace", fontSize: 13, lineHeight: 2 }}>
+              {/* Header */}
               <div style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 12, marginBottom: 12 }}>
-                <span style={{ color: T.dim }}>调研完成:</span> <span style={{ color: T.blue, fontWeight: 700 }}>{result.ticker} {result.name}</span> · {new Date().toISOString().slice(0, 10)} · <Badge text="deep" color={T.purple} /> · <Badge text={result.dataSource === "live" ? "行情实时" : "DEMO"} color={result.dataSource === "live" ? T.green : T.yellow} />
-              </div>
-              <div style={{ color: T.muted }}>最终评级: <span style={{ color: result.score >= 65 ? T.green : result.score >= 45 ? T.yellow : T.red, fontWeight: 700, fontSize: 15 }}>{result.rating} / {result.sub}</span></div>
-              <div style={{ color: T.muted }}>当前价: <span style={{ color: T.text, fontWeight: 700 }}>{result.cur}{result.price?.toFixed(2)}</span> {result.dataSource === "live" ? <span style={{ color: T.green }}>(实时)</span> : <span style={{ color: T.dim }}>(演示)</span>} · 距52周高 {result.cur}{result.high52?.toFixed(1)} 已 {pct(result.tech.priceVs52h)}，YTD {pct(result.ytd)}</div>
-              <div style={{ color: T.muted }}>仓位计划 <span style={{ color: T.dim }}>(总目标1.0单位, 中等仓):</span> {result.pos.entries.map(e => `${e.label} ${e.size.toFixed(2)}`).join(" → ")} → 储备 {result.pos.entries[3]?.size.toFixed(2)} 待下季业绩</div>
-              <div style={{ marginTop: 16, color: T.text }}>
-                <div style={{ color: T.blue, fontWeight: 700, marginBottom: 4 }}>三 条 理 由:</div>
-                {result.bulls.map((b, i) => (
-                  <div key={i} style={{ color: T.muted }}>
-                    <span style={{ color: i === 0 ? T.green : i === 1 ? T.green : T.yellow }}>{i + 1}.</span> <span style={{ color: T.text }}>{b.t}</span>: forward PE ~{result.fin.fwdPE}x vs {result.peers[0]?.n} ~{result.peers[0]?.pe}x — {b.d} <Badge text={i === 0 ? "高" : i === 1 ? "高" : "中-高"} color={i === 2 ? T.yellow : T.green} />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                  <div>
+                    <span style={{ color: T.dim }}>Research Report</span> <span style={{ color: T.blue, fontWeight: 700, fontSize: 15 }}>{result.ticker} {result.name}</span>
                   </div>
-                ))}
-              </div>
-              <div style={{ marginTop: 16, color: T.text }}>
-                <div style={{ color: T.red, fontWeight: 700, marginBottom: 4 }}>三个风险触发:</div>
-                {result.risks.map((r, i) => (
-                  <div key={i} style={{ color: T.muted }}>
-                    <span style={{ color: T.red }}>{i + 1}.</span> <span style={{ color: T.text }}>{r.t}</span>: {r.d} <RiskBadge level={r.l} />
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <Badge text={result.rating + " / " + result.sub} color={result.score >= 65 ? T.green : result.score >= 45 ? T.yellow : T.red} />
+                    <Badge text={result.dataSource === "live" ? "行情实时" : "DEMO"} color={result.dataSource === "live" ? T.green : T.yellow} />
+                    <Badge text="综合评分 " + result.score} color={T.blue} />
                   </div>
+                </div>
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 6 }}>
+                  {new Date().toISOString().slice(0, 10)} · {result.cur}{result.price?.toFixed(2)} {result.dataSource === "live" ? "(实时)" : "(演示)"} · 距52周高 {pct(result.tech.priceVs52h)} · YTD {pct(result.ytd)}
+                </div>
+              </div>
+
+              {/* Macro Context */}
+              {macro?.ok && (
+                <div style={{ padding: "8px 12px", background: T.cardAlt, borderRadius: 8, marginBottom: 14, borderLeft: `3px solid ${T.cyan}` }}>
+                  <span style={{ color: T.cyan, fontWeight: 700 }}>宏观环境:</span>{" "}
+                  <span style={{ color: T.muted }}>10Y 美债 {macro.yield10y} ({macro.yield10yChg}) · Fed Funds {macro.fedFunds}</span>{" "}
+                  <span style={{ color: T.dim }}>· {parseFloat(macro.yield10y) > 4 ? "利率偏高，成长股估值承压" : parseFloat(macro.yield10y) > 3.5 ? "利率中性偏高" : "利率偏低，利好成长股"}</span>
+                  <span style={{ fontSize: 10, color: T.dim, marginLeft: 6 }}>[{macro.source}]</span>
+                </div>
+              )}
+
+              {/* Bull/Bear Debate */}
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 16 }}>
+                {/* Bull Case */}
+                <div style={{ flex: "1 1 300px", minWidth: 260 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                    <span style={{ color: T.green, fontSize: 16 }}>&#x1F7E2;</span>
+                    <span style={{ color: T.green, fontWeight: 700, fontSize: 14 }}>多头观点 (Bull Case)</span>
+                  </div>
+                  {result.bulls.map((b, i) => (
+                    <div key={i} style={{ padding: "8px 12px", background: T.green + "08", borderRadius: 6, marginBottom: 6, borderLeft: `2px solid ${T.green}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontWeight: 700, color: T.text }}>{b.t}</span>
+                        <Badge text={i === 0 ? "证据: 高" : i === 1 ? "证据: 中-高" : "证据: 中"} color={i === 0 ? T.green : T.yellow} />
+                      </div>
+                      <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.6 }}>{b.d}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Bear Case */}
+                <div style={{ flex: "1 1 300px", minWidth: 260 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                    <span style={{ color: T.red, fontSize: 16 }}>&#x1F534;</span>
+                    <span style={{ color: T.red, fontWeight: 700, fontSize: 14 }}>空头观点 (Bear Case)</span>
+                  </div>
+                  {result.risks.map((r, i) => (
+                    <div key={i} style={{ padding: "8px 12px", background: T.red + "08", borderRadius: 6, marginBottom: 6, borderLeft: `2px solid ${T.red}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontWeight: 700, color: T.text }}>{r.t}</span>
+                        <RiskBadge level={r.l} />
+                      </div>
+                      <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.6 }}>{r.d}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Key Levels */}
+              {result.tech.levels && (
+                <div style={{ padding: "10px 12px", background: T.cardAlt, borderRadius: 8, marginBottom: 14, borderLeft: `3px solid ${T.purple}` }}>
+                  <span style={{ color: T.purple, fontWeight: 700 }}>关键价位:</span>{" "}
+                  <span style={{ color: T.green }}>S1 {result.cur}{result.tech.levels.s1?.toFixed(1)}</span>{" "}
+                  <span style={{ color: T.green }}>S2 {result.cur}{result.tech.levels.s2?.toFixed(1)}</span>{" "}
+                  <span style={{ color: T.green }}>S3 {result.cur}{result.tech.levels.s3?.toFixed(1)}</span>{" "}
+                  <span style={{ color: T.blue, fontWeight: 700 }}>|</span>{" "}
+                  <span style={{ color: T.red }}>R1 {result.cur}{result.tech.levels.r1?.toFixed(1)}</span>{" "}
+                  <span style={{ color: T.red }}>R2 {result.cur}{result.tech.levels.r2?.toFixed(1)}</span>{" "}
+                  <span style={{ color: T.red }}>R3 {result.cur}{result.tech.levels.r3?.toFixed(1)}</span>
+                  <span style={{ fontSize: 10, color: T.dim, marginLeft: 6 }}>[Pivot Points]</span>
+                </div>
+              )}
+
+              {/* Technical Signals */}
+              <div style={{ padding: "10px 12px", background: T.cardAlt, borderRadius: 8, marginBottom: 14, borderLeft: `3px solid ${T.orange}` }}>
+                <span style={{ color: T.orange, fontWeight: 700 }}>技术面:</span>{" "}
+                {result.tech.signals.map((s, i) => (
+                  <span key={i} style={{ color: s.color, marginRight: 12 }}>
+                    {s.name} {typeof s.val === "number" ? s.val.toFixed(1) : s.val} ({s.sig})
+                  </span>
                 ))}
+                <span style={{ fontSize: 10, color: T.dim }}>[SMA/EMA/MACD/RSI]</span>
               </div>
-              <div style={{ marginTop: 16, padding: "12px 14px", background: T.cardAlt, borderRadius: 8, borderLeft: `3px solid ${T.blue}` }}>
-                <div style={{ color: T.blue, fontWeight: 700, marginBottom: 4 }}>核心判断:</div>
-                <div style={{ color: T.text, lineHeight: 1.8 }}>"{result.verdict}"</div>
+
+              {/* Sentiment Summary */}
+              {sentiment?.ok && (
+                <div style={{ padding: "10px 12px", background: T.cardAlt, borderRadius: 8, marginBottom: 14, borderLeft: `3px solid ${T.purple}` }}>
+                  <span style={{ color: T.purple, fontWeight: 700 }}>市场情绪:</span>{" "}
+                  <span style={{ color: T.muted }}>
+                    StockTwits {sentiment.count}帖 · Bullish {sentiment.bullPct}% / Bearish {sentiment.bearPct}% · 方向 <b style={{ color: sentiment.direction === "偏多" ? T.green : sentiment.direction === "偏空" ? T.red : T.yellow }}>{sentiment.direction}</b> · 热度 {sentiment.crowdedness}
+                    {sentiment.watchlist > 0 && <> · Watchlist {sentiment.watchlist}</>}
+                  </span>
+                  <span style={{ fontSize: 10, color: T.dim, marginLeft: 6 }}>[{sentiment.source}]</span>
+                </div>
+              )}
+
+              {/* Position Plan */}
+              <div style={{ padding: "10px 12px", background: T.cardAlt, borderRadius: 8, marginBottom: 14, borderLeft: `3px solid ${T.blue}` }}>
+                <span style={{ color: T.blue, fontWeight: 700 }}>仓位计划 <span style={{ fontWeight: 400, color: T.dim }}>(1.0单位, ATR {result.tech.atrPct.toFixed(1)}% → {result.pos.overAlloc}):</span></span>
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>
+                  {result.pos.entries.map(e => `${e.label} ${e.size.toFixed(2)}`).join(" → ")}
+                </div>
               </div>
-              <div style={{ marginTop: 16, color: T.dim, fontSize: 11 }}>
-                数据透明度: {result.dataSource === "live" ? "FMP API 实时行情(价格/52周/市值/成交量) + 预设财务数据, 技术指标由实时价格计算" : "演示数据集, 技术指标由模拟价格计算"} ·
-                社交舆情: 覆盖{result.sent.rating}，证据强度{result.sent.buzz > 60 ? "中" : "低"}
+
+              {/* Verdict */}
+              <div style={{ padding: "14px 16px", background: T.cardAlt, borderRadius: 8, borderLeft: `4px solid ${result.score >= 65 ? T.green : result.score >= 45 ? T.yellow : T.red}`, marginBottom: 14 }}>
+                <div style={{ color: result.score >= 65 ? T.green : result.score >= 45 ? T.yellow : T.red, fontWeight: 700, fontSize: 14, marginBottom: 6 }}>核心判断:</div>
+                <div style={{ color: T.text, lineHeight: 1.8, fontSize: 14 }}>"{result.verdict}"</div>
               </div>
+
+              {/* Data Transparency */}
+              <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 10, marginTop: 10 }}>
+                <div style={{ fontSize: 11, color: T.dim, lineHeight: 1.8 }}>
+                  <span style={{ color: T.yellow }}>数据来源透明度:</span>
+                  {dataStatus.length > 0 && dataStatus.map((s, i) => (
+                    <span key={i} style={{ marginLeft: 6 }}>
+                      <span style={{ color: s.ok ? T.green : T.dim }}>{s.ok ? "\u2713" : "\u25CB"}</span> {s.name}
+                    </span>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: T.dim, marginTop: 6 }}>
+                  <span style={{ color: T.yellow }}>&#x26A0;</span> FMP 免费套餐限制: 仅支持 Profile(实时行情)。财务报表/历史K线/分析师预测需升级付费套餐。技术指标基于模拟K线计算，仅供趋势参考。
+                </div>
+              </div>
+
               <div style={{ marginTop: 8, color: T.dim, fontSize: 11 }}>
-                输入其他股票代码可继续分析。支持美股/港股任意标的。
+                本报告由 StockAnalyzer 自动生成 · 仅供参考，不构成投资建议 · 投资有风险，入市需谨慎
               </div>
             </Card>
           )}
@@ -975,7 +1295,7 @@ export default function StockAnalysisTool() {
 
       {/* Footer */}
       <div style={{ textAlign: "center", padding: "20px 0 8px", fontSize: 11, color: T.dim }}>
-        StockAnalyzer v2.0 · 数据来源: Financial Modeling Prep · 仅供参考，不构成投资建议
+        StockAnalyzer v2.1 · 数据来源: FMP(行情) · FRED(宏观) · StockTwits(情绪) · NewsAPI(新闻) · 仅供参考，不构成投资建议
       </div>
     </div>
   );
