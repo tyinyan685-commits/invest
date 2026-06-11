@@ -1163,7 +1163,7 @@ export default function StockAnalysisTool() {
                   <div style={{ display: "flex", gap: 6 }}>
                     <Badge text={result.rating + " / " + result.sub} color={result.score >= 65 ? T.green : result.score >= 45 ? T.yellow : T.red} />
                     <Badge text={result.dataSource === "live" ? "行情实时" : "DEMO"} color={result.dataSource === "live" ? T.green : T.yellow} />
-                    <Badge text="综合评分 " + result.score} color={T.blue} />
+                    <Badge text={"综合评分 " + result.score} color={T.blue} />
                   </div>
                 </div>
                 <div style={{ fontSize: 12, color: T.muted, marginTop: 6 }}>
