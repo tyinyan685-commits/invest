@@ -142,6 +142,14 @@ const fetchNews = async (query) => {
   } catch (e) { return { ok: false, total: 0, articles: [], error: e.message, source: "NewsAPI (失败)" }; }
 };
 
+const fetchFinancials = async (symbol) => {
+  try {
+    const r = await fetch(`/api/financials?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(12000) });
+    const d = await r.json();
+    return d;
+  } catch (e) { return { ok: false, error: e.message, source: "FMP financials (失败)" }; }
+};
+
 // ═══════════════════ FMP PROFILE → ANALYSIS FORMAT ═══════════════════
 const mergeLiveWithPreset = (ticker, prof) => {
   const p = prof;
@@ -464,13 +472,14 @@ export default function StockAnalysisTool() {
   const [sentiment, setSentiment] = useState(null);
   const [macro, setMacro] = useState(null);
   const [news, setNews] = useState(null);
+  const [finData, setFinData] = useState(null);
   const [dataStatus, setDataStatus] = useState([]);
 
   const doAnalyze = useCallback(async (ticker) => {
     const t = ticker.trim().toUpperCase();
     if (!t) return;
     setLoading(true); setError(""); setActiveTicker(t); setTab("overview");
-    setSentiment(null); setMacro(null); setNews(null); setDataStatus([]);
+    setSentiment(null); setMacro(null); setNews(null); setFinData(null); setDataStatus([]);
 
     let stockData = null, dataSource = "demo";
     const status = [];
@@ -504,14 +513,15 @@ export default function StockAnalysisTool() {
     const analysis = runAnalysis(t, stockData, dataSource);
     setResult(analysis);
 
-    // 4. Fetch external data (sentiment, macro, news) in parallel
+    // 4. Fetch external data (sentiment, macro, news, financials) in parallel
     status.push({ name: "FMP 行情", ok: dataSource === "live", note: dataSource === "live" ? "实时价格/52周/市值" : "预设数据" });
     status.push({ name: "技术指标", ok: true, note: "本地计算 (SMA/EMA/RSI/MACD/ATR)" });
 
-    const [sent, mac, nws] = await Promise.all([
+    const [sent, mac, nws, fin] = await Promise.all([
       fetchSentiment(t),
       fetchMacro(),
       fetchNews(stockData.name?.split(" ")[0] || t),
+      fetchFinancials(t),
     ]);
 
     setSentiment(sent);
@@ -523,7 +533,38 @@ export default function StockAnalysisTool() {
     setNews(nws);
     status.push({ name: "新闻", ok: nws.ok, note: nws.ok ? `${nws.total}条相关新闻` : nws.error });
 
-    status.push({ name: "财务报表", ok: false, note: "需FMP付费套餐 (预设数据)" });
+    // 5. Merge real financials into analysis if available
+    if (fin.ok && fin.eps > 0 && analysis.price > 0) {
+      setFinData(fin);
+      const realPE = +(analysis.price / fin.eps).toFixed(1);
+      const fwdEPS = fin.eps * (1 + fin.epsGrowth / 100);
+      const realFwdPE = fwdEPS > 0 ? +(analysis.price / fwdEPS).toFixed(1) : realPE;
+      const bookValuePS = fin.roe > 0 ? (fin.eps / (fin.roe / 100)) : 0;
+      const realPB = bookValuePS > 0 ? +(analysis.price / bookValuePS).toFixed(1) : 0;
+
+      // Override fin data in analysis result
+      const updatedFin = {
+        ...analysis.fin,
+        pe: realPE,
+        fwdPE: realFwdPE,
+        pb: realPB || analysis.fin.pb,
+        rev: fin.revenue,
+        revG: fin.revenueGrowth,
+        ni: fin.netIncome,
+        niG: fin.niGrowth,
+        gm: fin.grossMargin,
+        nm: fin.netMargin,
+        roe: fin.roe,
+        ocf: fin.revenue * 0.4, // estimate
+        cash: fin.netIncome * 0.7, // estimate
+      };
+      const updatedAnalysis = { ...analysis, fin: updatedFin, finSource: "live" };
+      setResult(updatedAnalysis);
+      status.push({ name: "财务报表", ok: true, note: `PE ${realPE}x, 营收 ${fmt(fin.revenue)}, EPS $${fin.eps.toFixed(2)}` });
+    } else {
+      setFinData(null);
+      status.push({ name: "财务报表", ok: false, note: fin.error || "FMP 无数据 (预设值)" });
+    }
     status.push({ name: "分析师预测", ok: false, note: "需FMP付费套餐" });
 
     setDataStatus(status);
@@ -546,7 +587,7 @@ export default function StockAnalysisTool() {
         <span style={{ fontSize: 22, fontWeight: 800, color: T.blue }}>StockAnalyzer</span>
         <span style={{ fontSize: 12, color: T.dim, background: T.card, padding: "2px 8px", borderRadius: 4 }}>v2.1</span>
         <span style={{ fontSize: 11, color: T.dim }}>多维度股票监测评估系统</span>
-        {result && <Badge text={result.dataSource === "live" ? "实时行情 + 预设财务" : "演示数据"} color={result.dataSource === "live" ? T.green : T.yellow} />}
+        {result && <Badge text={result.dataSource === "live" ? (result.finSource === "live" ? "实时行情 + 实时财务" : "实时行情 + 预设财务") : "演示数据"} color={result.dataSource === "live" ? T.green : T.yellow} />}
       </div>
 
       {/* API KEY SETTINGS */}
@@ -622,7 +663,9 @@ export default function StockAnalysisTool() {
           <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
             {result.dataSource === "live" ? (
               <div style={{ padding: "6px 14px", borderRadius: 8, background: T.green + "15", border: `1px solid ${T.green}33`, fontSize: 12, color: T.green }}>
-                实时行情 · FMP API · 价格/52周/市值/成交量为真实数据 · 财务指标来自预设库 · {new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}
+                实时行情 · FMP API · 价格/52周/市值/成交量为真实数据
+                {result.finSource === "live" ? " · 财务指标来自 FMP 实时报表" : " · 财务指标来自预设库"}
+                · {new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}
               </div>
             ) : (
               <div style={{ padding: "6px 14px", borderRadius: 8, background: T.yellow + "15", border: `1px solid ${T.yellow}33`, fontSize: 12, color: T.yellow }}>
