@@ -115,52 +115,30 @@ const fmpFetchProfile = async (symbol, apiKey) => {
   return null;
 };
 
-// ═══════════════════ EXTERNAL API SERVICES ═══════════════════
-const FRED_KEY = "07a98309feadf15506ac4004b1d66492";
-const NEWSAPI_KEY = "6150d75a436e482aa42d48e7d0c8a765";
+// ═══════════════════ EXTERNAL API SERVICES (via Vercel proxy) ═══════════════════
+// Direct browser calls blocked by CORS → proxy through /api serverless functions
 
 const fetchSentiment = async (symbol) => {
   try {
-    const r = await fetch(`https://api.stocktwits.com/api/2/streams/symbol/${symbol}.json`, { signal: AbortSignal.timeout(8000) });
-    if (!r.ok) throw new Error("StockTwits " + r.status);
+    const r = await fetch(`/api/sentiment?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(12000) });
     const d = await r.json();
-    const msgs = d.messages || [];
-    const sym = d.symbol || {};
-    let bullish = 0, bearish = 0;
-    const recentPosts = [];
-    for (const m of msgs) {
-      const s = m.entities?.sentiment?.basic;
-      if (s === "Bullish") bullish++;
-      else if (s === "Bearish") bearish++;
-      if (recentPosts.length < 8) recentPosts.push({ body: (m.body || "").slice(0, 120), sentiment: s || "Neutral", time: (m.created_at || "").slice(0, 16) });
-    }
-    const total = msgs.length || 1;
-    return { ok: true, count: msgs.length, watchlist: sym.watchlist_count || 0, bullish, bearish, neutral: total - bullish - bearish, bullPct: Math.round(bullish / total * 100), bearPct: Math.round(bearish / total * 100), direction: Math.round(bullish / total * 100) > 60 ? "偏多" : Math.round(bearish / total * 100) > 60 ? "偏空" : "中性", crowdedness: msgs.length > 25 ? "高" : msgs.length > 15 ? "中" : "低", strength: msgs.length > 20 ? "中" : "低", recentPosts, source: "StockTwits 公开API" };
+    return d;
   } catch (e) { return { ok: false, error: e.message, count: 0, bullish: 0, bearish: 0, bullPct: 0, bearPct: 0, watchlist: 0, recentPosts: [], source: "StockTwits (失败)" }; }
 };
 
 const fetchMacro = async () => {
   try {
-    const [r10y, rFF] = await Promise.all([
-      fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=DGS10&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=5`, { signal: AbortSignal.timeout(8000) }),
-      fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=FEDFUNDS&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`, { signal: AbortSignal.timeout(8000) }),
-    ]);
-    const d10y = await r10y.json(); const dFF = await rFF.json();
-    const y10 = d10y.observations?.[0] || {};
-    const ff = dFF.observations?.[0] || {};
-    const y10prev = d10y.observations?.[4] || {};
-    const chg = y10prev.value && y10.value ? ((parseFloat(y10.value) - parseFloat(y10prev.value)) * 100).toFixed(0) + "bp" : "N/A";
-    return { ok: true, yield10y: y10.value ? parseFloat(y10.value).toFixed(2) + "%" : "N/A", yield10yDate: y10.date || "", yield10yChg: chg + " (5日)", fedFunds: ff.value ? parseFloat(ff.value).toFixed(2) + "%" : "N/A", source: "FRED API" };
+    const r = await fetch(`/api/macro`, { signal: AbortSignal.timeout(12000) });
+    const d = await r.json();
+    return d;
   } catch (e) { return { ok: false, yield10y: "N/A", fedFunds: "N/A", error: e.message, source: "FRED (失败)" }; }
 };
 
 const fetchNews = async (query) => {
   try {
-    const r = await fetch(`https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&sortBy=publishedAt&pageSize=10&language=en&apiKey=${NEWSAPI_KEY}`, { signal: AbortSignal.timeout(8000) });
-    if (!r.ok) throw new Error("NewsAPI " + r.status);
+    const r = await fetch(`/api/news?q=${encodeURIComponent(query)}`, { signal: AbortSignal.timeout(12000) });
     const d = await r.json();
-    const articles = (d.articles || []).slice(0, 8).map(a => ({ title: (a.title || "").slice(0, 100), source: a.source?.name || "?", date: (a.publishedAt || "").slice(0, 10), url: a.url || "#" }));
-    return { ok: true, total: d.totalResults || 0, articles, source: "NewsAPI.org" };
+    return d;
   } catch (e) { return { ok: false, total: 0, articles: [], error: e.message, source: "NewsAPI (失败)" }; }
 };
 
