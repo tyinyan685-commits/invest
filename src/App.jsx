@@ -364,12 +364,17 @@ function runAnalysis(ticker, stockData, dataSource) {
 
   const f = p.fin;
   let fundScore = 50;
-  if (f.fwdPE < 20) fundScore += 15; else if (f.fwdPE < 30) fundScore += 5; else fundScore -= 10;
-  if (f.revG > 30) fundScore += 15; else if (f.revG > 10) fundScore += 8; else fundScore -= 5;
-  if (f.niG > 30) fundScore += 10; else if (f.niG > 0) fundScore += 5; else fundScore -= 10;
-  if (f.roe > 25) fundScore += 10; else if (f.roe > 15) fundScore += 5;
-  if (f.gm > 50) fundScore += 5;
-  fundScore = Math.min(100, Math.max(0, fundScore));
+  const hasFinData = f.fwdPE != null;
+  if (hasFinData) {
+    if (f.fwdPE < 20) fundScore += 15; else if (f.fwdPE < 30) fundScore += 5; else fundScore -= 10;
+    if (f.revG > 30) fundScore += 15; else if (f.revG > 10) fundScore += 8; else fundScore -= 5;
+    if (f.niG > 30) fundScore += 10; else if (f.niG > 0) fundScore += 5; else fundScore -= 10;
+    if (f.roe > 25) fundScore += 10; else if (f.roe > 15) fundScore += 5;
+    if (f.gm > 50) fundScore += 5;
+    fundScore = Math.min(100, Math.max(0, fundScore));
+  } else {
+    fundScore = null; // no data, show N/A
+  }
 
   let techScore = 50;
   if (curRSI > 50 && curRSI < 70) techScore += 10; else if (curRSI > 70) techScore -= 5; else if (curRSI < 30) techScore += 10;
@@ -395,9 +400,9 @@ function runAnalysis(ticker, stockData, dataSource) {
     { cond: `站上 SMA200 (${curSMA200?.toFixed(0) || "?"})`, action: "升级至增持(Overweight)" },
   ];
   const radarData = [
-    { dim: "估值", val: f.fwdPE < 20 ? 85 : f.fwdPE < 30 ? 60 : 35 },
-    { dim: "成长", val: Math.min(100, Math.max(20, f.revG * 0.8)) },
-    { dim: "盈利", val: Math.min(100, f.roe * 1.5) },
+    { dim: "估值", val: hasFinData ? (f.fwdPE < 20 ? 85 : f.fwdPE < 30 ? 60 : 35) : 0, na: !hasFinData },
+    { dim: "成长", val: hasFinData ? Math.min(100, Math.max(20, f.revG * 0.8)) : 0, na: !hasFinData },
+    { dim: "盈利", val: hasFinData ? Math.min(100, f.roe * 1.5) : 0, na: f.roe == null },
     { dim: "技术面", val: techScore },
     { dim: "情绪", val: p.sent.buzz },
     { dim: "安全边际", val: Math.min(100, Math.abs(priceVs52h) * 1.5) },
@@ -591,7 +596,7 @@ export default function StockAnalysisTool() {
         <span style={{ fontSize: 22, fontWeight: 800, color: T.blue }}>StockAnalyzer</span>
         <span style={{ fontSize: 12, color: T.dim, background: T.card, padding: "2px 8px", borderRadius: 4 }}>v2.1</span>
         <span style={{ fontSize: 11, color: T.dim }}>多维度股票监测评估系统</span>
-        {result && <Badge text={result.dataSource === "live" ? (result.finSource === "live" ? "实时行情 + 实时财务" : "实时行情 + 预设财务") : "演示数据"} color={result.dataSource === "live" ? T.green : T.yellow} />}
+        {result && <Badge text={result.dataSource === "live" ? (result.finSource === "live" ? "实时行情 + 实时财务" : result.finAvailable === "preset" ? "实时行情 + 预设财务(参考)" : "实时行情 · 财务数据不可用") : "演示数据"} color={result.dataSource === "live" ? (result.finSource === "live" ? T.green : T.yellow) : T.red} />}
       </div>
 
       {/* API KEY SETTINGS */}
@@ -668,7 +673,7 @@ export default function StockAnalysisTool() {
             {result.dataSource === "live" ? (
               <div style={{ padding: "6px 14px", borderRadius: 8, background: T.green + "15", border: `1px solid ${T.green}33`, fontSize: 12, color: T.green }}>
                 实时行情 · FMP API · 价格/52周/市值/成交量为真实数据
-                {result.finSource === "live" ? " · 财务指标来自 FMP 实时报表" : " · 财务指标来自预设库"}
+                {result.finSource === "live" ? " · 财务指标来自 FMP 实时报表" : " · 财务指标来自预设库(参考值,请以财报为准)"}
                 · {new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}
               </div>
             ) : (
@@ -677,6 +682,12 @@ export default function StockAnalysisTool() {
               </div>
             )}
           </div>
+          {/* Preset financial warning */}
+          {result.finSource !== "live" && (
+            <div style={{ padding: "8px 14px", borderRadius: 8, background: T.yellow + "15", border: `1px solid ${T.yellow}44`, fontSize: 12, color: T.yellow, marginBottom: 12, lineHeight: 1.6 }}>
+              <b>&#x26A0; 注意：</b>该股票的财务指标（PE/PB/营收/利润等）来自预设数据或无法获取，<b>可能不准确</b>。请以公司官方财报为准。升级 FMP 付费套餐可获取实时报表数据。
+            </div>
+          )}
 
           {/* STOCK HEADER */}
           <Card style={{ marginBottom: 16, background: `linear-gradient(135deg, ${T.card}, ${T.cardAlt})` }}>
@@ -823,9 +834,15 @@ export default function StockAnalysisTool() {
           {/* ═══ FUNDAMENTAL ═══ */}
           {tab === "fundamental" && (
             <div>
+              {result.finSource !== "live" && (
+                <div style={{ padding: "10px 14px", borderRadius: 8, background: T.yellow + "18", border: `1px solid ${T.yellow}44`, fontSize: 13, color: T.yellow, marginBottom: 16, lineHeight: 1.7 }}>
+                  &#x26A0;&#xFE0F; <b>以下财务指标为预设参考值，未经实时财报验证，可能不准确！</b>
+                  <br />请以公司最新财报（10-K/10-Q/年报）为准。如需实时数据，请升级 FMP 付费套餐。
+                </div>
+              )}
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
                 <Card style={{ flex: "1 1 320px", minWidth: 280 }}>
-                  <SectionTitle icon="&#x1F4B0;">估值指标</SectionTitle>
+                  <SectionTitle icon="&#x1F4B0;">估值指标 {result.finSource === "live" ? <Badge text="实时数据" color={T.green} /> : result.finAvailable === "preset" ? <Badge text="预设参考值" color={T.yellow} /> : <Badge text="数据不可用" color={T.red} />}</SectionTitle>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     {[
                       { l: "PE (TTM)", v: result.fin.pe != null ? result.fin.pe + "x" : "N/A" },
@@ -843,16 +860,21 @@ export default function StockAnalysisTool() {
                   </div>
                   <div style={{ marginTop: 10, padding: 10, background: T.cardAlt, borderRadius: 8 }}>
                     <div style={{ fontSize: 11, color: T.muted, marginBottom: 2 }}>基本面评分</div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <div style={{ flex: 1, height: 8, background: T.border, borderRadius: 4, overflow: "hidden" }}>
-                        <div style={{ width: `${result.fundScore}%`, height: "100%", background: result.fundScore >= 65 ? T.green : result.fundScore >= 45 ? T.yellow : T.red, borderRadius: 4, transition: "width 0.5s" }} />
+                    {result.fundScore != null ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ flex: 1, height: 8, background: T.border, borderRadius: 4, overflow: "hidden" }}>
+                          <div style={{ width: `${result.fundScore}%`, height: "100%", background: result.fundScore >= 65 ? T.green : result.fundScore >= 45 ? T.yellow : T.red, borderRadius: 4, transition: "width 0.5s" }} />
+                        </div>
+                        <span style={{ fontSize: 16, fontWeight: 800, color: result.fundScore >= 65 ? T.green : T.yellow }}>{result.fundScore}</span>
                       </div>
-                      <span style={{ fontSize: 16, fontWeight: 800, color: result.fundScore >= 65 ? T.green : T.yellow }}>{result.fundScore}</span>
+                    ) : (
+                      <div style={{ fontSize: 14, color: T.dim, padding: "4px 0" }}>N/A — 财务数据不可用，无法评分</div>
+                    )}
                     </div>
                   </div>
                 </Card>
                 <Card style={{ flex: "1 1 320px", minWidth: 280 }}>
-                  <SectionTitle icon="&#x1F4CA;">增长与盈利</SectionTitle>
+                  <SectionTitle icon="&#x1F4CA;">增长与盈利 {result.finSource === "live" ? <Badge text="实时" color={T.green} /> : result.finAvailable === "preset" ? <Badge text="参考值" color={T.yellow} /> : null}</SectionTitle>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>营收</div>
