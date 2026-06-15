@@ -159,6 +159,14 @@ const fetchProfile = async (symbol) => {
   } catch (e) { return { ok: false, error: e.message }; }
 };
 
+const fetchHistory = async (symbol) => {
+  try {
+    const r = await fetch(`/api/history?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(20000) });
+    const d = await r.json();
+    return d; // { ok: true, bars: [...], yearStartPrice, count } or { ok: false, error }
+  } catch (e) { return { ok: false, error: e.message, bars: [], yearStartPrice: null }; }
+};
+
 // ═══════════════════ FMP PROFILE → ANALYSIS FORMAT ═══════════════════
 const mergeLiveWithPreset = (ticker, prof) => {
   const p = prof;
@@ -333,7 +341,9 @@ function runAnalysis(ticker, stockData, dataSource) {
   const prices = hasHistory ? p.prices : genPrices(p.price, 80, p.vol);
   const closes = prices.map(d => d.close);
 
+  // Moving averages
   const sma20 = sma(closes, 20), sma50 = sma(closes, 50);
+  const sma200arr = sma(closes, 200); // compute real SMA200
   const ema10 = ema(closes, 10), ema20 = ema(closes, 20);
   const rsi = calcRSI(closes, 14);
   const macd = calcMACD(closes);
@@ -342,13 +352,37 @@ function runAnalysis(ticker, stockData, dataSource) {
   const curRSI = rsi.filter(v => v !== null).pop() || 50;
   const curSMA20 = sma20.filter(v => v !== null).pop();
   const curSMA50 = sma50.filter(v => v !== null).pop();
-  const curSMA200 = closes.length >= 60 ? closes.slice(0, 60).reduce((a, b) => a + b, 0) / 60 : p.price * 1.05;
+  // Real SMA200 — use actual 200-day average if enough data, else use all available
+  const curSMA200 = sma200arr.filter(v => v !== null).pop() ||
+    (closes.length >= 60 ? closes.slice(-60).reduce((a, b) => a + b, 0) / 60 : p.price * 1.05);
+
   const curMACD = macd.line[macd.line.length - 1];
   const curSignal = macd.signal[macd.signal.length - 1];
   const macdHist = macd.hist[macd.hist.length - 1];
   const avgVol = prices.slice(-20).reduce((s, d) => s + d.volume, 0) / 20;
 
-  const chartLen = Math.min(60, prices.length);
+  // If real history data, compute real 52-week high/low from actual prices
+  let realHigh52 = p.high52, realLow52 = p.low52;
+  if (hasHistory && prices.length >= 100) {
+    const last252 = prices.slice(-Math.min(252, prices.length));
+    realHigh52 = Math.max(...last252.map(d => d.high));
+    realLow52 = Math.min(...last252.map(d => d.low));
+  }
+
+  // Bollinger Bands (20-day, 2 std dev)
+  const bbLen = 20;
+  let bollMid = curSMA20, bollUpper = null, bollLower = null;
+  if (closes.length >= bbLen) {
+    const bbSlice = closes.slice(-bbLen);
+    const bbMean = bbSlice.reduce((a, b) => a + b, 0) / bbLen;
+    const bbStd = Math.sqrt(bbSlice.reduce((s, v) => s + (v - bbMean) ** 2, 0) / bbLen);
+    bollMid = +bbMean.toFixed(2);
+    bollUpper = +(bbMean + 2 * bbStd).toFixed(2);
+    bollLower = +(bbMean - 2 * bbStd).toFixed(2);
+  }
+
+  // Chart data — show last 80 bars (or all if less)
+  const chartLen = Math.min(80, prices.length);
   const chartData = prices.slice(-chartLen).map((d, i) => {
     const idx = prices.length - chartLen + i;
     return {
@@ -366,8 +400,22 @@ function runAnalysis(ticker, stockData, dataSource) {
   signals.push({ name: "MACD", val: curMACD > 0 ? "+" : "-", sig: curMACD > curSignal ? "金叉(多)" : "死叉(空)", color: curMACD > curSignal ? T.green : T.red });
   if (curSMA20) signals.push({ name: "vs SMA20", val: closes[closes.length - 1] > curSMA20 ? "上方" : "下方", sig: closes[closes.length - 1] > curSMA20 ? "短期趋势向上" : "短期趋势向下", color: closes[closes.length - 1] > curSMA20 ? T.green : T.red });
   if (curSMA50) signals.push({ name: "vs SMA50", val: closes[closes.length - 1] > curSMA50 ? "上方" : "下方", sig: closes[closes.length - 1] > curSMA50 ? "中期趋势向上" : "中期趋势向下", color: closes[closes.length - 1] > curSMA50 ? T.green : T.red });
+  // Add SMA200 signal if available
+  if (closes.length >= 200) {
+    signals.push({ name: "vs SMA200", val: closes[closes.length - 1] > curSMA200 ? "上方" : "下方", sig: closes[closes.length - 1] > curSMA200 ? "长期趋势向上" : "长期趋势向下", color: closes[closes.length - 1] > curSMA200 ? T.green : T.red });
+  }
+  // Add Bollinger Band signal
+  if (bollUpper && bollLower) {
+    const curPrice = closes[closes.length - 1];
+    if (curPrice > bollUpper) signals.push({ name: "Boll", val: "上轨上方", sig: "超买区间", color: T.red });
+    else if (curPrice < bollLower) signals.push({ name: "Boll", val: "下轨下方", sig: "超卖区间", color: T.green });
+    else signals.push({ name: "Boll", val: `${bollLower}-${bollUpper}`, sig: "区间内运行", color: T.yellow });
+  }
 
-  const priceVs52h = p.high52 ? ((p.price - p.high52) / p.high52 * 100) : -20;
+  // Use real 52-week high/low from historical data if available
+  const high52 = realHigh52 || p.high52;
+  const low52 = realLow52 || p.low52;
+  const priceVs52h = high52 ? ((p.price - high52) / high52 * 100) : -20;
   const priceVsSMA200 = curSMA200 ? ((p.price - curSMA200) / curSMA200 * 100) : 0;
 
   const f = p.fin;
@@ -424,9 +472,11 @@ function runAnalysis(ticker, stockData, dataSource) {
   const s3 = +(last.low - 2 * (last.high - pivot)).toFixed(2), r3 = +(last.high + 2 * (pivot - last.low)).toFixed(2);
 
   return {
-    ticker, ...p, prices, chartData, closes, dataSource,
+    ticker, ...p, high52, low52, prices, chartData, closes, dataSource,
     tech: { sma20: curSMA20, sma50: curSMA50, sma200: curSMA200, ema10: ema10[ema10.length - 1], rsi: curRSI, macd: curMACD, signal: curSignal, hist: macdHist, atr: curATR, atrPct, avgVol, signals, priceVs52h, priceVsSMA200,
-      levels: { pivot: +pivot.toFixed(2), s1, s2, s3, r1, r2, r3 } },
+      boll: { mid: bollMid, upper: bollUpper, lower: bollLower },
+      levels: { pivot: +pivot.toFixed(2), s1, s2, s3, r1, r2, r3 },
+      historyLen: closes.length, isRealHistory: hasHistory },
     fundScore, techScore, radarData,
     pos: { target: posTarget, overAlloc, entries, triggers },
   };
@@ -540,19 +590,39 @@ export default function StockAnalysisTool() {
       return;
     }
 
-    const analysis = runAnalysis(t, stockData, dataSource);
+    let analysis = runAnalysis(t, stockData, dataSource);
     setResult(analysis);
 
-    // 4. Fetch external data (sentiment, macro, news, financials) in parallel
+    // 4. Fetch external data (sentiment, macro, news, financials, history) in parallel
     status.push({ name: "FMP 行情", ok: dataSource === "live", note: dataSource === "live" ? "实时价格/52周/市值" : "预设数据" });
-    status.push({ name: "技术指标", ok: true, note: "本地计算 (SMA/EMA/RSI/MACD/ATR)" });
 
-    const [sent, mac, nws, fin] = await Promise.all([
+    const [sent, mac, nws, fin, hist] = await Promise.all([
       fetchSentiment(t),
       fetchMacro(),
       fetchNews(stockData.name?.split(" ")[0] || t),
       fetchFinancials(t),
+      fetchHistory(t),
     ]);
+
+    // 4a. If real historical bars available, re-run analysis with real data
+    if (hist.ok && hist.bars && hist.bars.length >= 30) {
+      stockData.prices = hist.bars; // attach real OHLCV to stockData
+      analysis = runAnalysis(t, stockData, dataSource);
+      // Compute real YTD from yearStartPrice
+      if (hist.yearStartPrice && hist.yearStartPrice > 0 && analysis.price > 0) {
+        const realYTD = +((analysis.price - hist.yearStartPrice) / hist.yearStartPrice * 100).toFixed(1);
+        analysis = { ...analysis, ytd: realYTD };
+      }
+      analysis = { ...analysis, historySource: "live" };
+      status.push({ name: "历史K线", ok: true, note: `${hist.count}天真实OHLCV (${hist.bars[0]?.date}~${hist.bars[hist.bars.length - 1]?.date})` });
+      status.push({ name: "技术指标", ok: true, note: "真实K线计算 (SMA/EMA/RSI/MACD/ATR)" });
+    } else {
+      // No real history — analysis uses genPrices (simulated), mark clearly
+      analysis = { ...analysis, historySource: "simulated" };
+      status.push({ name: "历史K线", ok: false, note: hist.error ? hist.error : "该股票历史数据不可用" });
+      status.push({ name: "技术指标", ok: false, note: "⚠ 基于模拟K线，仅供趋势参考" });
+    }
+    setResult(analysis);
 
     setSentiment(sent);
     status.push({ name: "社交情绪", ok: sent.ok, note: sent.ok ? `StockTwits ${sent.count}帖, Bullish ${sent.bullPct}%` : sent.error });
@@ -589,8 +659,8 @@ export default function StockAnalysisTool() {
         cash: fin.netIncome * 0.7, // estimate
         finAvailable: "live",
       };
-      const updatedAnalysis = { ...analysis, fin: updatedFin, finSource: "live" };
-      setResult(updatedAnalysis);
+      analysis = { ...analysis, fin: updatedFin, finSource: "live" };
+      setResult(analysis);
       status.push({ name: "财务报表", ok: true, note: `PE ${realPE}x, 营收 ${fmt(fin.revenue)}, EPS $${fin.eps.toFixed(2)}` });
     } else {
       setFinData(null);
@@ -697,6 +767,7 @@ export default function StockAnalysisTool() {
               <div style={{ padding: "6px 14px", borderRadius: 8, background: T.green + "15", border: `1px solid ${T.green}33`, fontSize: 12, color: T.green }}>
                 实时行情 · FMP API · 价格/52周/市值/成交量为真实数据
                 {result.finSource === "live" ? " · 财务指标来自 FMP 实时报表" : " · 财务指标来自预设库(参考值,请以财报为准)"}
+                {result.historySource === "live" ? ` · ${result.tech.historyLen}天真实K线` : " · ⚠ 技术指标基于模拟K线"}
                 · {new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}
               </div>
             ) : (
@@ -709,6 +780,13 @@ export default function StockAnalysisTool() {
           {result.finSource !== "live" && (
             <div style={{ padding: "8px 14px", borderRadius: 8, background: T.yellow + "15", border: `1px solid ${T.yellow}44`, fontSize: 12, color: T.yellow, marginBottom: 12, lineHeight: 1.6 }}>
               <b>&#x26A0; 注意：</b>该股票的财务指标（PE/PB/营收/利润等）来自预设数据或无法获取，<b>可能不准确</b>。请以公司官方财报为准。升级 FMP 付费套餐可获取实时报表数据。
+            </div>
+          )}
+
+          {/* Simulated K-line warning */}
+          {result.historySource === "simulated" && (
+            <div style={{ padding: "8px 14px", borderRadius: 8, background: T.red + "12", border: `1px solid ${T.red}44`, fontSize: 12, color: T.red, marginBottom: 12, lineHeight: 1.6 }}>
+              <b>&#x26A0; 重要提示：</b>该股票的历史K线数据不可用（港股需更高级FMP套餐），<b>所有技术指标（SMA/EMA/RSI/MACD/ATR/支撑阻力位）均基于模拟数据计算</b>，仅供趋势参考，不代表真实市场状况。
             </div>
           )}
 
@@ -1007,13 +1085,17 @@ export default function StockAnalysisTool() {
                 </Card>
               </div>
               <Card>
-                <SectionTitle icon="&#x2699;&#xFE0F;">技术指标总结</SectionTitle>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
+                <SectionTitle icon="&#x2699;&#xFE0F;">技术指标总结 {result.tech.isRealHistory ? <Badge text={`${result.tech.historyLen}天真实数据`} color={T.green} /> : <Badge text="模拟数据" color={T.red} />}</SectionTitle>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 10 }}>
                   {[
-                    { l: "ATR (14)", v: result.tech.atr.toFixed(2), s: `(${result.tech.atrPct.toFixed(1)}%)`, c: result.tech.atrPct > 4 ? T.red : T.yellow },
+                    { l: "ATR (14)", v: result.tech.atr.toFixed(2), s: `(${result.tech.atrPct.toFixed(1)}%/日)`, c: result.tech.atrPct > 4 ? T.red : T.yellow },
                     { l: "vs 52周高", v: pct(result.tech.priceVs52h), s: result.cur + result.high52?.toFixed(1), c: T.red },
-                    { l: "vs SMA200", v: pct(result.tech.priceVsSMA200), s: result.tech.sma200?.toFixed(0), c: result.tech.priceVsSMA200 > 0 ? T.green : T.red },
+                    { l: "vs SMA200", v: pct(result.tech.priceVsSMA200), s: result.cur + result.tech.sma200?.toFixed(0), c: result.tech.priceVsSMA200 > 0 ? T.green : T.red },
                     { l: "20日均量", v: fmt(result.tech.avgVol), s: "股/日", c: T.text },
+                    ...(result.tech.boll?.upper ? [
+                      { l: "Boll 上轨", v: result.cur + result.tech.boll.upper, s: "中轨 " + result.cur + result.tech.boll.mid, c: T.orange },
+                      { l: "Boll 下轨", v: result.cur + result.tech.boll.lower, s: `带宽 ${((result.tech.boll.upper - result.tech.boll.lower) / result.tech.boll.mid * 100).toFixed(1)}%`, c: T.orange },
+                    ] : []),
                   ].map((m, i) => (
                     <div key={i} style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>{m.l}</div>
@@ -1214,7 +1296,7 @@ export default function StockAnalysisTool() {
                   )}
                 </div>
                 <div style={{ marginTop: 12, padding: "8px 12px", background: T.yellow + "15", border: `1px solid ${T.yellow}33`, borderRadius: 6, fontSize: 11, color: T.yellow }}>
-                  FMP 免费套餐仅支持实时行情(Profile)。财务报表/历史价格/分析师预测需升级付费套餐后启用。
+                  数据来源: FMP Profile(行情) + Historical(K线) + Income Statement/Metrics(财务) · StockTwits(情绪) · FRED(宏观) · NewsAPI(新闻)
                 </div>
               </Card>
             </div>
@@ -1350,7 +1432,7 @@ export default function StockAnalysisTool() {
                   ))}
                 </div>
                 <div style={{ fontSize: 11, color: T.dim, marginTop: 6 }}>
-                  <span style={{ color: T.yellow }}>&#x26A0;</span> FMP 免费套餐限制: 仅支持 Profile(实时行情)。财务报表/历史K线/分析师预测需升级付费套餐。技术指标基于模拟K线计算，仅供趋势参考。
+                  <span style={{ color: T.yellow }}>&#x26A0;</span> 技术指标基于{result.tech.isRealHistory ? `${result.tech.historyLen}天真实日线` : "模拟K线（该股票历史数据不可用）"}计算。本报告自动生成，仅供参考，不构成投资建议。
                 </div>
               </div>
 
