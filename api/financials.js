@@ -6,9 +6,10 @@ export default async function handler(req, res) {
   const opt = { signal: AbortSignal.timeout(12000) };
   const fetchJSON = (url) => fetch(url, opt).then(r => r.json()).catch(() => []);
   try {
-    // Fetch 7 endpoints in parallel (income limit=5 for quarterly QoQ trends)
-    const [incRes, kmRes, fgRes, bsRes, cfRes, ptRes] = await Promise.all([
-      fetchJSON(`${BASE}/income-statement?symbol=${symbol}&apikey=${KEY}&limit=5`),
+    // Fetch 7 endpoints in parallel (income quarterly for QoQ trends, annual for growth rates)
+    const [incRes, incAnnual, kmRes, fgRes, bsRes, cfRes, ptRes] = await Promise.all([
+      fetchJSON(`${BASE}/income-statement?symbol=${symbol}&apikey=${KEY}&limit=5&period=quarter`),
+      fetchJSON(`${BASE}/income-statement?symbol=${symbol}&apikey=${KEY}&limit=2`),
       fetchJSON(`${BASE}/key-metrics?symbol=${symbol}&apikey=${KEY}&limit=1`),
       fetchJSON(`${BASE}/financial-growth?symbol=${symbol}&apikey=${KEY}&limit=1`),
       fetchJSON(`${BASE}/balance-sheet-statement?symbol=${symbol}&apikey=${KEY}&limit=1`),
@@ -16,8 +17,9 @@ export default async function handler(req, res) {
       fetchJSON(`${BASE}/price-target-summary?symbol=${symbol}&apikey=${KEY}`),
     ]);
 
-    const inc = Array.isArray(incRes) && incRes[0] ? incRes[0] : null;
-    const incPrev = Array.isArray(incRes) && incRes[1] ? incRes[1] : null;
+    // Annual data for headline metrics (PE, revenue, growth rates)
+    const inc = Array.isArray(incAnnual) && incAnnual[0] ? incAnnual[0] : (Array.isArray(incRes) && incRes[0] ? incRes[0] : null);
+    const incPrev = Array.isArray(incAnnual) && incAnnual[1] ? incAnnual[1] : null;
     const km = Array.isArray(kmRes) && kmRes[0] ? kmRes[0] : null;
     const fg = Array.isArray(fgRes) && fgRes[0] ? fgRes[0] : null;
     const bs = Array.isArray(bsRes) && bsRes[0] ? bsRes[0] : null;

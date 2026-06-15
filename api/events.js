@@ -10,78 +10,109 @@ export default async function handler(req, res) {
 
   try {
     const today = new Date();
-    const twoWeeks = new Date(today);
-    twoWeeks.setDate(today.getDate() + 14);
     const fmtDate = (d) => d.toISOString().slice(0, 10);
 
-    // Parallel: earnings calendar + FRED releases + key economic series
-    const [earnRes, releasesRes, cpiRes, ppiRes, unrateRes, payRes] = await Promise.all([
-      fetchJSON(`${FMP}/earning-calendar?symbol=${symbol}&apikey=${FMP_KEY}`),
-      fetchJSON(`${FRED}/releases/dates?api_key=${FRED_KEY}&file_type=json&realtime_start=${fmtDate(today)}&realtime_end=${fmtDate(twoWeeks)}&limit=25`),
-      fetchJSON(`${FRED}/series/observations?series_id=CPIAUCSL&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
-      fetchJSON(`${FRED}/series/observations?series_id=PPIACO&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
+    // Parallel: quarterly income (for earnings estimate) + key economic series
+    const [qIncRes, cpiRes, ppiRes, unrateRes, payRes, fomcRes] = await Promise.all([
+      fetchJSON(`${FMP}/income-statement?symbol=${symbol}&apikey=${FMP_KEY}&limit=4&period=quarter`),
+      fetchJSON(`${FRED}/series/observations?series_id=CPIAUCSL&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`),
+      fetchJSON(`${FRED}/series/observations?series_id=PPIACO&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`),
       fetchJSON(`${FRED}/series/observations?series_id=UNRATE&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
       fetchJSON(`${FRED}/series/observations?series_id=PAYEMS&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
+      fetchJSON(`${FRED}/series/observations?series_id=FEDFUNDS&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
     ]);
 
-    // --- 1. Earnings date ---
+    // --- 1. Estimate next earnings date from quarterly filings ---
     let earnings = null;
-    if (earnRes && Array.isArray(earnRes)) {
-      const upcoming = earnRes.find(e => e.date && new Date(e.date) >= new Date(fmtDate(today))) || earnRes[0];
-      if (upcoming) {
+    if (Array.isArray(qIncRes) && qIncRes.length > 0) {
+      const latest = qIncRes[0];
+      const latestDate = latest.date ? new Date(latest.date) : null;
+      if (latestDate) {
+        // Next earnings ≈ 90 days after most recent quarter end
+        const estNext = new Date(latestDate);
+        estNext.setDate(estNext.getDate() + 90);
+        // If estimated date is in the past, add another quarter
+        if (estNext < today) estNext.setDate(estNext.getDate() + 90);
+        const qLabel = latest.period || "";
         earnings = {
-          date: upcoming.date,
-          hour: upcoming.hour || "TBD",
-          epsEstimate: upcoming.epsEstimated || null,
-          revenueEstimate: upcoming.revenueEstimated || null,
+          date: fmtDate(estNext),
+          estimated: true,
+          lastQuarter: `${qLabel} (${fmtDate(latestDate)})`,
+          lastRevenue: latest.revenue || null,
+          lastEps: latest.epsDiluted || latest.eps || null,
         };
       }
     }
 
-    // --- 2. FRED economic releases (next 2 weeks) ---
-    const releaseMap = {
-      "Consumer Price Index": { tag: "CPI", impact: "高", icon: "📊" },
-      "Producer Price Index": { tag: "PPI", impact: "中-高", icon: "📈" },
-      "Employment Situation": { tag: "非农就业", impact: "高", icon: "👷" },
-      "FOMC": { tag: "FOMC利率决议", impact: "最高", icon: "🏦" },
-      "Federal Open Market Committee": { tag: "FOMC", impact: "最高", icon: "🏦" },
-      "Retail Sales": { tag: "零售销售", impact: "中", icon: "🛒" },
-      "Housing Starts": { tag: "新屋开工", impact: "低-中", icon: "🏠" },
-      "Industrial Production": { tag: "工业产出", impact: "低-中", icon: "🏭" },
-      "Advance Retail Sales": { tag: "零售销售", impact: "中", icon: "🛒" },
-      "Business Inventories": { tag: "商业库存", impact: "低", icon: "📦" },
-      "Gross Domestic Product": { tag: "GDP", impact: "高", icon: "📉" },
-      "Personal Income and Outlays": { tag: "PCE消费", impact: "中-高", icon: "💰" },
-    };
+    // --- 2. Build macro calendar from known schedules + FRED data ---
+    // Known 2026 FOMC meeting dates (Federal Reserve schedule)
+    const fomcDates2026 = [
+      "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
+      "2026-07-29", "2026-09-16", "2026-11-04", "2026-12-16",
+    ];
 
-    let macroEvents = [];
-    if (releasesRes?.releases) {
-      const seen = new Set();
-      for (const rel of releasesRes.releases) {
-        const name = rel.name || "";
-        let mapped = null;
-        for (const [key, val] of Object.entries(releaseMap)) {
-          if (name.includes(key) && !seen.has(val.tag)) {
-            mapped = val;
-            seen.add(val.tag);
-            break;
-          }
-        }
-        if (mapped) {
-          macroEvents.push({
-            date: rel.date,
-            name: mapped.tag,
-            fullName: name,
-            impact: mapped.impact,
-            icon: mapped.icon,
-          });
-        }
+    const macroEvents = [];
+
+    // Add upcoming FOMC dates
+    for (const d of fomcDates2026) {
+      if (new Date(d) > today) {
+        macroEvents.push({
+          date: d,
+          name: "FOMC 利率决议",
+          icon: "\u{1F3E6}",
+          impact: "\u6700\u9AD8",
+          source: "Federal Reserve",
+        });
+        break; // Only show the next FOMC
       }
     }
+
+    // Estimate next CPI release (usually ~13th of each month)
+    const nextCPI = new Date(today);
+    nextCPI.setDate(13);
+    if (nextCPI <= today) nextCPI.setMonth(nextCPI.getMonth() + 1);
+    macroEvents.push({
+      date: fmtDate(nextCPI),
+      name: "CPI \u6570\u636E\u53D1\u5E03",
+      icon: "\u{1F4CA}",
+      impact: "\u9AD8",
+      source: "BLS",
+    });
+
+    // Estimate next PPI release (usually ~15th of each month, after CPI)
+    const nextPPI = new Date(today);
+    nextPPI.setDate(15);
+    if (nextPPI <= today) nextPPI.setMonth(nextPPI.getMonth() + 1);
+    macroEvents.push({
+      date: fmtDate(nextPPI),
+      name: "PPI \u6570\u636E\u53D1\u5E03",
+      icon: "\u{1F4C8}",
+      impact: "\u4E2D-\u9AD8",
+      source: "BLS",
+    });
+
+    // Estimate next Non-Farm Payrolls (usually first Friday of month)
+    const nextNFP = new Date(today);
+    nextNFP.setDate(1);
+    // Find first Friday
+    while (nextNFP.getDay() !== 5) nextNFP.setDate(nextNFP.getDate() + 1);
+    if (nextNFP <= today) {
+      nextNFP.setMonth(nextNFP.getMonth() + 1);
+      nextNFP.setDate(1);
+      while (nextNFP.getDay() !== 5) nextNFP.setDate(nextNFP.getDate() + 1);
+    }
+    macroEvents.push({
+      date: fmtDate(nextNFP),
+      name: "\u975E\u519C\u5C31\u4E1A\u62A5\u544A",
+      icon: "\u{1F477}",
+      impact: "\u9AD8",
+      source: "BLS",
+    });
+
     // Sort by date
     macroEvents.sort((a, b) => (a.date > b.date ? 1 : -1));
 
-    // --- 3. Latest economic indicators ---
+    // --- 3. Latest economic indicators with YoY ---
     const indicators = {};
     const parseLatest = (res) => {
       if (!res?.observations?.length) return null;
@@ -94,25 +125,41 @@ export default async function handler(req, res) {
       return { value: v, prev: pv, change: +(v - pv).toFixed(2), date: latest.date };
     };
 
-    const cpi = parseLatest(cpiRes);
-    const ppi = parseLatest(ppiRes);
+    // CPI: calculate YoY (compare with 12 months ago)
+    const parseYoY = (res) => {
+      if (!res?.observations?.length) return null;
+      const obs = res.observations;
+      const latest = obs[0];
+      const yearAgo = obs[obs.length - 1]; // last in array (oldest)
+      if (!latest?.value || latest.value === ".") return null;
+      const v = parseFloat(latest.value);
+      const yv = yearAgo ? parseFloat(yearAgo.value) : v;
+      const yoy = yv > 0 ? +((v - yv) / yv * 100).toFixed(1) : 0;
+      const prev = obs[1] || latest;
+      const pv = parseFloat(prev?.value || latest.value);
+      return { value: +v.toFixed(1), yoy, mom: +(v - pv).toFixed(2), date: latest.date };
+    };
+
+    const cpi = parseYoY(cpiRes);
+    const ppi = parseYoY(ppiRes);
     const unrate = parseLatest(unrateRes);
     const pay = parseLatest(payRes);
+    const ff = parseLatest(fomcRes);
 
-    if (cpi) indicators.cpi = { ...cpi, label: "CPI (同比)", unit: "" };
-    if (ppi) indicators.ppi = { ...ppi, label: "PPI (同比)", unit: "" };
-    if (unrate) indicators.unemployment = { ...unrate, label: "失业率", unit: "%" };
-    if (pay) indicators.nonfarm = { ...pay, label: "非农就业(月)", unit: "千人" };
+    if (cpi) indicators.cpi = { value: cpi.value, yoy: cpi.yoy + "%", mom: cpi.mom, date: cpi.date, label: "CPI", unit: "", desc: cpi.yoy > 3 ? "\u504F\u9AD8\uFF0C\u6210\u957F\u80A1\u4F30\u503C\u627F\u538B" : cpi.yoy > 2 ? "\u6E29\u548C" : "\u4F4E\u8FF7" };
+    if (ppi) indicators.ppi = { value: ppi.value, yoy: ppi.yoy + "%", mom: ppi.mom, date: ppi.date, label: "PPI", unit: "", desc: ppi.yoy > 4 ? "\u751F\u4EA7\u7AEF\u901A\u80C0\u538B\u529B" : ppi.yoy > 2 ? "\u751F\u4EA7\u7AEF\u6E29\u548C" : "\u751F\u4EA7\u7AEF\u4F4E\u8FF7" };
+    if (unrate) indicators.unemployment = { value: unrate.value, change: unrate.change, date: unrate.date, label: "\u5931\u4E1A\u7387", unit: "%", desc: unrate.value > 5 ? "\u52B3\u52A8\u5E02\u573A\u964D\u6E29" : "\u52B3\u52A8\u5E02\u573A\u7A33\u5065" };
+    if (pay) indicators.nonfarm = { value: pay.value, change: pay.change, date: pay.date, label: "\u975E\u519C\u5C31\u4E1A", unit: "\u5343\u4EBA", desc: pay.change > 100 ? "\u5C31\u4E1A\u5F3A\u52B2" : pay.change > 0 ? "\u5C31\u4E1A\u7A33\u5B9A" : "\u5C31\u4E1A\u8D70\u5F31" };
+    if (ff) indicators.fedFunds = { value: ff.value, date: ff.date, label: "Fed Funds", unit: "%", desc: "" };
 
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=600");
     res.status(200).json({
       ok: true,
       earnings,
-      macroEvents: macroEvents.slice(0, 12),
+      macroEvents: macroEvents.slice(0, 8),
       indicators,
       generatedAt: fmtDate(today),
-      endDate: fmtDate(twoWeeks),
     });
   } catch (e) {
     res.setHeader("Access-Control-Allow-Origin", "*");

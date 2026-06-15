@@ -660,7 +660,7 @@ export default function StockAnalysisTool() {
     setEvents(evts);
     if (evts.ok) {
       const evtCount = evts.macroEvents?.length || 0;
-      status.push({ name: "事件日历", ok: true, note: `未来2周 ${evtCount}个宏观事件${evts.earnings?.date ? `, 财报日 ${evts.earnings.date}` : ""}` });
+      status.push({ name: "事件日历", ok: true, note: `${evtCount}个宏观事件${evts.earnings?.date ? `, 财报预计 ${evts.earnings.date}` : ""}` });
     } else {
       status.push({ name: "事件日历", ok: false, note: evts.error || "事件数据不可用" });
     }
@@ -970,30 +970,32 @@ export default function StockAnalysisTool() {
               )}
 
               {/* P2-1: Macro Events Calendar */}
-              {events?.ok && (events.macroEvents?.length > 0 || events.earnings?.date) && (
+              {events?.ok && (
                 <Card style={{ marginTop: 16 }}>
-                  <SectionTitle icon="&#x1F4C5;">事件日历 (未来2周) <Badge text={`${events.generatedAt} ~ ${events.endDate}`} color={T.dim} /></SectionTitle>
+                  <SectionTitle icon="&#x1F4C5;">事件日历 & 宏观数据 <Badge text={`更新于 ${events.generatedAt}`} color={T.dim} /></SectionTitle>
                   {/* Earnings date (highest priority) */}
                   {events.earnings?.date && (
                     <div style={{ padding: "10px 14px", background: T.red + "12", borderRadius: 8, borderLeft: `3px solid ${T.red}`, marginBottom: 10 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <div>
                           <span style={{ fontSize: 14, fontWeight: 800, color: T.red }}>&#x1F6A8; {result.ticker} 财报发布</span>
-                          <span style={{ fontSize: 13, color: T.muted, marginLeft: 10 }}>{events.earnings.date} {events.earnings.hour === "BMO" ? "(盘前)" : events.earnings.hour === "AMC" ? "(盘后)" : ""}</span>
+                          <span style={{ fontSize: 13, color: T.muted, marginLeft: 10 }}>预计 {events.earnings.date}</span>
+                          {events.earnings.estimated && <span style={{ fontSize: 11, color: T.dim, marginLeft: 6 }}>(基于上季 {events.earnings.lastQuarter} 推算)</span>}
                         </div>
-                        <Badge text="风控触发·最高" color={T.red} />
+                        <Badge text={events.earnings.estimated ? "预估日期" : "风控触发"} color={events.earnings.estimated ? T.yellow : T.red} />
                       </div>
-                      {(events.earnings.epsEstimate != null || events.earnings.revenueEstimate != null) && (
+                      {events.earnings.lastRevenue && (
                         <div style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>
-                          {events.earnings.epsEstimate != null && <span style={{ marginRight: 14 }}>EPS 预期: ${events.earnings.epsEstimate.toFixed(2)}</span>}
-                          {events.earnings.revenueEstimate != null && <span>营收预期: {result.cur}{fmt(events.earnings.revenueEstimate)}</span>}
+                          <span style={{ marginRight: 14 }}>上季营收: {result.cur}{fmt(events.earnings.lastRevenue)}</span>
+                          {events.earnings.lastEps != null && <span>上季EPS: {result.cur}{events.earnings.lastEps.toFixed(2)}</span>}
                         </div>
                       )}
                     </div>
                   )}
                   {/* Macro events timeline */}
-                  {events.macroEvents.length > 0 && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 220, overflowY: "auto" }}>
+                  {events.macroEvents?.length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 10 }}>
+                      <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>近期宏观事件</div>
                       {events.macroEvents.map((ev, i) => (
                         <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", background: T.cardAlt, borderRadius: 6, borderLeft: `3px solid ${ev.impact.includes("最高") ? T.red : ev.impact.includes("高") ? T.orange : ev.impact.includes("中") ? T.yellow : T.dim}` }}>
                           <span style={{ fontSize: 11, color: T.dim, minWidth: 80, flexShrink: 0 }}>{ev.date}</span>
@@ -1013,15 +1015,17 @@ export default function StockAnalysisTool() {
                           <div key={key} style={{ flex: "1 1 120px", minWidth: 100 }}>
                             <div style={{ fontSize: 11, color: T.dim }}>{ind.label}</div>
                             <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{ind.value}{ind.unit}</div>
-                            <div style={{ fontSize: 11, color: ind.change > 0 ? T.red : ind.change < 0 ? T.green : T.dim }}>
-                              {ind.change > 0 ? "+" : ""}{ind.change} vs上期
+                            <div style={{ fontSize: 11, color: T.dim }}>
+                              {ind.yoy && <span style={{ color: ind.yoy.includes("-") ? T.green : T.yellow }}>YoY {ind.yoy}</span>}
+                              {ind.change != null && <span>{ind.change > 0 ? "+" : ""}{ind.change} MoM</span>}
                             </div>
+                            {ind.desc && <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>{ind.desc}</div>}
                           </div>
                         ))}
                       </div>
                     </div>
                   )}
-                  <div style={{ marginTop: 8, fontSize: 10, color: T.dim }}>来源: FRED releases + FMP earnings-calendar · 仅供参考</div>
+                  <div style={{ marginTop: 8, fontSize: 10, color: T.dim }}>来源: FRED + FMP quarterly income · 财报日期为预估值 · 仅供参考</div>
                 </Card>
               )}
 
