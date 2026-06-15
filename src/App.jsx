@@ -176,6 +176,16 @@ const fetchEvents = async (symbol) => {
   } catch (e) { return { ok: false, error: e.message, earnings: null, macroEvents: [], indicators: {} }; }
 };
 
+// Futu OpenD bridge - local proxy for real options IV data
+const FUTU_BRIDGE = "http://localhost:9876";
+const fetchIV = async (symbol) => {
+  try {
+    const r = await fetch(`${FUTU_BRIDGE}/api/option-volatility?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(5000) });
+    const d = await r.json();
+    return d;
+  } catch (e) { return { ok: false, error: e.message }; }
+};
+
 // ═══════════════════ FMP PROFILE → ANALYSIS FORMAT ═══════════════════
 const mergeLiveWithPreset = (ticker, prof) => {
   const p = prof;
@@ -495,6 +505,42 @@ function runAnalysis(ticker, stockData, dataSource) {
   const s2 = +(pivot - (last.high - last.low)).toFixed(2), r2 = +(pivot + (last.high - last.low)).toFixed(2);
   const s3 = +(last.low - 2 * (last.high - pivot)).toFixed(2), r3 = +(last.high + 2 * (pivot - last.low)).toFixed(2);
 
+  // ═══ P3: Volatility Analytics (proxy for options IV) ═══
+  // Historical volatility from daily returns
+  const returns = [];
+  for (let i = 1; i < closes.length; i++) {
+    returns.push(Math.log(closes[i] / closes[i - 1]));
+  }
+  const avgReturn = returns.length > 0 ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;
+  const variance = returns.length > 1 ? returns.reduce((s, r) => s + (r - avgReturn) ** 2, 0) / (returns.length - 1) : 0;
+  const dailyVol = Math.sqrt(variance);
+  const hvAnnualized = +(dailyVol * Math.sqrt(252) * 100).toFixed(1); // HV as %
+
+  // ATR-implied daily/weekly/monthly moves
+  const atrDailyPct = +(curATR / p.price * 100).toFixed(2);
+  const atrWeeklyPct = +(atrDailyPct * Math.sqrt(5)).toFixed(1);
+  const atrMonthlyPct = +(atrDailyPct * Math.sqrt(21)).toFixed(1);
+
+  // Bollinger implied volatility (2 std devs = ~95% confidence)
+  const bollWidth = bollUpper && bollLower && bollMid ? +((bollUpper - bollLower) / (2 * bollMid) * 100).toFixed(1) : null;
+
+  // Scenario analysis (P3-2)
+  const curPrice = p.price;
+  const bullTarget = curPrice * (1 + atrMonthlyPct / 100 * 2); // +2 monthly ATR moves
+  const baseTarget = curPrice * (1 + atrMonthlyPct / 100 * 0.5); // +0.5 monthly ATR
+  const bearTarget = curPrice * (1 - atrMonthlyPct / 100 * 2); // -2 monthly ATR
+  const stopLoss = curSMA50 ? curSMA50 * 0.85 : curPrice * 0.85; // 15% below SMA50
+  const riskReward = curPrice > stopLoss ? +((bullTarget - curPrice) / (curPrice - stopLoss)).toFixed(1) : 0;
+
+  // Expected value (probability-weighted)
+  const scenarios = [
+    { name: "乐观", prob: 0.25, target: bullTarget, desc: `突破阻力 + 财报超预期`, color: T.green },
+    { name: "基准", prob: 0.50, target: baseTarget, desc: `技术面确认 + 业绩符合预期`, color: T.yellow },
+    { name: "悲观", prob: 0.25, target: bearTarget, desc: `跌破支撑 + 财报不及预期`, color: T.red },
+  ];
+  const expectedValue = scenarios.reduce((s, sc) => s + sc.prob * sc.target, 0);
+  const expectedReturn = +((expectedValue - curPrice) / curPrice * 100).toFixed(1);
+
   return {
     ticker, ...p, high52, low52, prices, chartData, closes, dataSource,
     tech: { sma20: curSMA20, sma50: curSMA50, sma200: curSMA200, ema10: ema10[ema10.length - 1], rsi: curRSI, macd: curMACD, signal: curSignal, hist: macdHist, atr: curATR, atrPct, avgVol, signals, priceVs52h, priceVsSMA200,
@@ -502,6 +548,23 @@ function runAnalysis(ticker, stockData, dataSource) {
       vwma,
       levels: { pivot: +pivot.toFixed(2), s1, s2, s3, r1, r2, r3 },
       historyLen: closes.length, isRealHistory: hasHistory },
+    // P3: Volatility & Scenarios
+    vol: {
+      hv: hvAnnualized,
+      atrDailyPct, atrWeeklyPct, atrMonthlyPct,
+      bollWidth,
+      dailyVol: +(dailyVol * 100).toFixed(3),
+    },
+    scenarios: {
+      items: scenarios,
+      stopLoss: +stopLoss.toFixed(2),
+      riskReward,
+      expectedValue: +expectedValue.toFixed(2),
+      expectedReturn,
+      bullTarget: +bullTarget.toFixed(2),
+      baseTarget: +baseTarget.toFixed(2),
+      bearTarget: +bearTarget.toFixed(2),
+    },
     fundScore, techScore, radarData,
     pos: { target: posTarget, overAlloc, entries, triggers },
   };
@@ -565,6 +628,7 @@ export default function StockAnalysisTool() {
   const [finData, setFinData] = useState(null);
   const [dataStatus, setDataStatus] = useState([]);
   const [events, setEvents] = useState(null);
+  const [ivData, setIvData] = useState(null);
 
   const doAnalyze = useCallback(async (ticker) => {
     const t = ticker.trim().toUpperCase();
@@ -663,6 +727,15 @@ export default function StockAnalysisTool() {
       status.push({ name: "事件日历", ok: true, note: `${evtCount}个宏观事件${evts.earnings?.date ? `, 财报预计 ${evts.earnings.date}` : ""}` });
     } else {
       status.push({ name: "事件日历", ok: false, note: evts.error || "事件数据不可用" });
+    }
+
+    // 4b. Try to fetch real options IV from Futu OpenD bridge (optional, local only)
+    const iv = await fetchIV(t);
+    setIvData(iv.ok ? iv : null);
+    if (iv.ok) {
+      status.push({ name: "期权IV", ok: true, note: `IV ${iv.avg_iv}%, HV ${iv.avg_hv}%, 溢价 ${iv.vol_premium}% (${iv.contracts_scanned}合约)` });
+    } else {
+      status.push({ name: "期权IV", ok: false, note: "Futu桥接未连接 (使用HV替代)" });
     }
 
     setNews(nws);
@@ -1427,6 +1500,195 @@ export default function StockAnalysisTool() {
                       </div>
                     </div>
                   ))}
+                </div>
+              </Card>
+
+              {/* ═══ P3: VOLATILITY ANALYTICS ═══ */}
+              <Card style={{ marginTop: 16 }}>
+                <SectionTitle icon="&#x1F4CA;">波动率分析</SectionTitle>
+                {ivData ? (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                      <Badge text="Futu OpenD" color={T.cyan} />
+                      <span style={{ fontSize: 11, color: T.muted }}>实时期权隐含波动率</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                      <div style={{ flex: "1 1 120px", background: T.cardAlt, padding: "10px 12px", borderRadius: 8, borderLeft: `3px solid ${T.cyan}` }}>
+                        <div style={{ fontSize: 11, color: T.muted }}>隐含波动率 (IV)</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: T.cyan }}>{ivData.avg_iv}%</div>
+                        <div style={{ fontSize: 10, color: T.dim }}>Call {ivData.call_iv}% / Put {ivData.put_iv}%</div>
+                      </div>
+                      <div style={{ flex: "1 1 120px", background: T.cardAlt, padding: "10px 12px", borderRadius: 8, borderLeft: `3px solid ${T.purple}` }}>
+                        <div style={{ fontSize: 11, color: T.muted }}>历史波动率 (HV)</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: T.purple }}>{ivData.avg_hv}%</div>
+                        <div style={{ fontSize: 10, color: T.dim }}>{ivData.hv_days}日回望期</div>
+                      </div>
+                      <div style={{ flex: "1 1 120px", background: T.cardAlt, padding: "10px 12px", borderRadius: 8, borderLeft: `3px solid ${ivData.vol_premium > 0 ? T.yellow : T.green}` }}>
+                        <div style={{ fontSize: 11, color: T.muted }}>波动率溢价</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: ivData.vol_premium > 0 ? T.yellow : T.green }}>{ivData.vol_premium > 0 ? "+" : ""}{ivData.vol_premium}%</div>
+                        <div style={{ fontSize: 10, color: T.dim }}>IV - HV (期权定价{ivData.vol_premium > 5 ? "偏高" : ivData.vol_premium > 0 ? "合理" : "偏低"})</div>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <div style={{ flex: "1 1 120px", background: T.cardAlt, padding: "8px 12px", borderRadius: 8 }}>
+                        <div style={{ fontSize: 11, color: T.muted }}>Put-Call 偏度</div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: ivData.skew > 3 ? T.red : ivData.skew > 0 ? T.yellow : T.green }}>
+                          {ivData.skew > 0 ? "+" : ""}{ivData.skew}%
+                        </div>
+                        <div style={{ fontSize: 10, color: T.dim }}>{ivData.skew > 3 ? "看跌保护需求强" : ivData.skew > 0 ? "轻微看跌偏好" : "看涨情绪主导"}</div>
+                      </div>
+                      <div style={{ flex: "1 1 120px", background: T.cardAlt, padding: "8px 12px", borderRadius: 8 }}>
+                        <div style={{ fontSize: 11, color: T.muted }}>期限结构</div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: ivData.term_structure === "contango" ? T.green : ivData.term_structure === "backwardation" ? T.red : T.yellow }}>
+                          {ivData.term_structure === "contango" ? "正向 (Contango)" : ivData.term_structure === "backwardation" ? "反向 (Backwardation)" : "平坦 (Flat)"}
+                        </div>
+                        <div style={{ fontSize: 10, color: T.dim }}>近期 {ivData.near_term_iv}% / 远期 {ivData.far_term_iv}%</div>
+                      </div>
+                      <div style={{ flex: "1 1 120px", background: T.cardAlt, padding: "8px 12px", borderRadius: 8 }}>
+                        <div style={{ fontSize: 11, color: T.muted }}>扫描合约数</div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{ivData.contracts_scanned}</div>
+                        <div style={{ fontSize: 10, color: T.dim }}>近月/次月 ATM 合约</div>
+                      </div>
+                    </div>
+                    {/* IV vs HV visual comparison bar */}
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontSize: 11, color: T.muted, marginBottom: 4 }}>IV vs HV 对比</div>
+                      <div style={{ display: "flex", height: 16, borderRadius: 8, overflow: "hidden", background: T.cardAlt }}>
+                        <div style={{ width: `${Math.min(100, (ivData.avg_iv / Math.max(ivData.avg_iv, ivData.avg_hv) * 100))}%`, background: `linear-gradient(90deg, ${T.cyan}, ${T.blue})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#fff", transition: "width 0.5s" }}>
+                          IV {ivData.avg_iv}%
+                        </div>
+                        <div style={{ flex: 1 }} />
+                        <div style={{ width: `${Math.min(100, (ivData.avg_hv / Math.max(ivData.avg_iv, ivData.avg_hv) * 100))}%`, background: `linear-gradient(90deg, ${T.purple}, ${T.orange})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "#fff", transition: "width 0.5s" }}>
+                          HV {ivData.avg_hv}%
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                      <Badge text="历史计算" color={T.yellow} />
+                      <span style={{ fontSize: 11, color: T.muted }}>基于历史价格计算 (启动Futu桥接可获取实时期权IV)</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <div style={{ flex: "1 1 140px", background: T.cardAlt, padding: "10px 12px", borderRadius: 8, borderLeft: `3px solid ${T.purple}` }}>
+                        <div style={{ fontSize: 11, color: T.muted }}>历史波动率 (HV)</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: T.purple }}>{result.vol.hv}%</div>
+                        <div style={{ fontSize: 10, color: T.dim }}>年化 · 日收益率标准差 × √252</div>
+                      </div>
+                      <div style={{ flex: "1 1 140px", background: T.cardAlt, padding: "10px 12px", borderRadius: 8, borderLeft: `3px solid ${T.blue}` }}>
+                        <div style={{ fontSize: 11, color: T.muted }}>日波动率</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: T.blue }}>{result.vol.dailyVol}%</div>
+                        <div style={{ fontSize: 10, color: T.dim }}>日均对数收益率标准差</div>
+                      </div>
+                      {result.vol.bollWidth != null && (
+                        <div style={{ flex: "1 1 140px", background: T.cardAlt, padding: "10px 12px", borderRadius: 8, borderLeft: `3px solid ${T.cyan}` }}>
+                          <div style={{ fontSize: 11, color: T.muted }}>布林带宽度</div>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: T.cyan }}>{result.vol.bollWidth}%</div>
+                          <div style={{ fontSize: 10, color: T.dim }}>2σ通道 / 中轨 (波动区间参考)</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* ATR-implied moves */}
+                <div style={{ fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 8 }}>ATR 隐含波动区间</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {[
+                    { label: "日内", val: result.vol.atrDailyPct, color: T.blue },
+                    { label: "周", val: result.vol.atrWeeklyPct, color: T.green },
+                    { label: "月", val: result.vol.atrMonthlyPct, color: T.yellow },
+                  ].map((item, i) => (
+                    <div key={i} style={{ flex: "1 1 100px", background: T.cardAlt, padding: "8px 10px", borderRadius: 8, textAlign: "center" }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>{item.label}</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: item.color }}>±{item.val}%</div>
+                      <div style={{ fontSize: 10, color: T.dim }}>
+                        ≈ ${item.label === "日内" ? (result.price * item.val / 100).toFixed(2) : (result.price * item.val / 100).toFixed(1)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+
+              {/* ═══ P3: SCENARIO STRESS TEST ═══ */}
+              <Card style={{ marginTop: 16 }}>
+                <SectionTitle icon="&#x1F3AF;">三情景压力测试</SectionTitle>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+                  {result.scenarios.items.map((sc, i) => (
+                    <div key={i} style={{ flex: "1 1 180px", background: T.cardAlt, borderRadius: 10, padding: "14px 16px", borderTop: `3px solid ${sc.color}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                        <span style={{ fontSize: 14, fontWeight: 800, color: sc.color }}>{sc.name}</span>
+                        <Badge text={`${(sc.prob * 100).toFixed(0)}%概率`} color={sc.color} />
+                      </div>
+                      <div style={{ fontSize: 24, fontWeight: 800, color: T.text, marginBottom: 4 }}>
+                        ${sc.target.toFixed(2)}
+                      </div>
+                      <div style={{ fontSize: 12, color: sc.target > result.price ? T.green : T.red, fontWeight: 600, marginBottom: 4 }}>
+                        {sc.target > result.price ? "+" : ""}{((sc.target - result.price) / result.price * 100).toFixed(1)}%
+                      </div>
+                      <div style={{ fontSize: 11, color: T.muted }}>{sc.desc}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Expected Value */}
+                <div style={{ background: `linear-gradient(135deg, ${T.cardAlt}, #1a2744)`, borderRadius: 10, padding: "14px 16px", marginBottom: 14 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 10 }}>概率加权预期</div>
+                  <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                    <div style={{ flex: "1 1 120px" }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>预期价值</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: result.scenarios.expectedReturn >= 0 ? T.green : T.red }}>
+                        ${result.scenarios.expectedValue}
+                      </div>
+                    </div>
+                    <div style={{ flex: "1 1 120px" }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>预期收益率</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: result.scenarios.expectedReturn >= 0 ? T.green : T.red }}>
+                        {result.scenarios.expectedReturn >= 0 ? "+" : ""}{result.scenarios.expectedReturn}%
+                      </div>
+                    </div>
+                    <div style={{ flex: "1 1 120px" }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>风险收益比</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: result.scenarios.riskReward >= 2 ? T.green : result.scenarios.riskReward >= 1 ? T.yellow : T.red }}>
+                        1:{result.scenarios.riskReward}
+                      </div>
+                    </div>
+                    <div style={{ flex: "1 1 120px" }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>建议止损</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: T.red }}>
+                        ${result.scenarios.stopLoss}
+                      </div>
+                      <div style={{ fontSize: 10, color: T.dim }}>SMA50 × 0.85</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Scenario visualization bar */}
+                <div style={{ fontSize: 11, color: T.muted, marginBottom: 6 }}>情景分布 (价格轴)</div>
+                <div style={{ position: "relative", height: 40, background: T.cardAlt, borderRadius: 8, overflow: "hidden" }}>
+                  {(() => {
+                    const minP = Math.min(result.scenarios.bearTarget, result.scenarios.stopLoss) * 0.95;
+                    const maxP = result.scenarios.bullTarget * 1.05;
+                    const range = maxP - minP;
+                    const toPercent = (v) => ((v - minP) / range * 100);
+                    const curPct = toPercent(result.price);
+                    return (
+                      <>
+                        <div style={{ position: "absolute", left: `${toPercent(result.scenarios.bearTarget * 0.9)}%`, width: `${Math.max(1, toPercent(result.scenarios.stopLoss) - toPercent(result.scenarios.bearTarget * 0.9))}%`, height: "100%", background: T.red + "20" }} />
+                        <div style={{ position: "absolute", left: `${toPercent(result.scenarios.stopLoss)}%`, width: `${Math.max(1, toPercent(result.scenarios.bullTarget) - toPercent(result.scenarios.stopLoss))}%`, height: "100%", background: T.green + "10" }} />
+                        <div style={{ position: "absolute", left: `${curPct}%`, top: 0, bottom: 0, width: 2, background: T.text, zIndex: 2 }}>
+                          <div style={{ position: "absolute", top: -2, left: -14, fontSize: 9, color: T.text, whiteSpace: "nowrap" }}>现价</div>
+                        </div>
+                        {result.scenarios.items.map((sc, i) => (
+                          <div key={i} style={{ position: "absolute", left: `${toPercent(sc.target)}%`, top: "50%", transform: "translateY(-50%)", width: 8, height: 8, borderRadius: "50%", background: sc.color, border: "2px solid #fff", zIndex: 3 }} title={`${sc.name}: $${sc.target.toFixed(2)}`} />
+                        ))}
+                        <div style={{ position: "absolute", left: `${toPercent(result.scenarios.stopLoss)}%`, top: "50%", transform: "translateY(-50%)", width: 0, height: 0, borderLeft: "5px solid transparent", borderRight: "5px solid transparent", borderBottom: `8px solid ${T.red}`, zIndex: 3 }} title={`止损: $${result.scenarios.stopLoss}`} />
+                        <div style={{ position: "absolute", bottom: 2, left: 4, fontSize: 9, color: T.dim }}>${minP.toFixed(0)}</div>
+                        <div style={{ position: "absolute", bottom: 2, right: 4, fontSize: 9, color: T.dim }}>${maxP.toFixed(0)}</div>
+                      </>
+                    );
+                  })()}
                 </div>
               </Card>
             </div>
