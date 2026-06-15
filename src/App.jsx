@@ -710,7 +710,21 @@ export default function StockAnalysisTool() {
         quarters: fin.quarters ?? null,
         finAvailable: "live",
       };
-      analysis = { ...analysis, fin: updatedFin, finSource: "live" };
+      // Recalculate fundamental score with real data
+      let liveFundScore = 50;
+      const lf = updatedFin;
+      if (lf.fwdPE != null) {
+        if (lf.fwdPE < 20) liveFundScore += 15; else if (lf.fwdPE < 30) liveFundScore += 5; else liveFundScore -= 10;
+        if (lf.revG > 30) liveFundScore += 15; else if (lf.revG > 10) liveFundScore += 8; else liveFundScore -= 5;
+        if (lf.niG > 30) liveFundScore += 10; else if (lf.niG > 0) liveFundScore += 5; else liveFundScore -= 10;
+        if (lf.roe > 25) liveFundScore += 10; else if (lf.roe > 15) liveFundScore += 5;
+        if (lf.gm > 50) liveFundScore += 5;
+        liveFundScore = Math.min(100, Math.max(0, liveFundScore));
+      } else {
+        liveFundScore = null;
+      }
+
+      analysis = { ...analysis, fin: updatedFin, finSource: "live", fundScore: liveFundScore };
       setResult(analysis);
       status.push({ name: "财务报表", ok: true, note: `PE ${realPE}x, 营收 ${fmt(fin.revenue)}, EPS $${fin.eps.toFixed(2)}${fin.operatingCF ? ", OCF " + fmt(fin.operatingCF) : ""}${fin.cash ? ", 现金 " + fmt(fin.cash) : ""}` });
       if (fin.analystTarget?.avgTarget) {
@@ -979,17 +993,18 @@ export default function StockAnalysisTool() {
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <div>
                           <span style={{ fontSize: 14, fontWeight: 800, color: T.red }}>&#x1F6A8; {result.ticker} 财报发布</span>
-                          <span style={{ fontSize: 13, color: T.muted, marginLeft: 10 }}>预计 {events.earnings.date}</span>
-                          {events.earnings.estimated && <span style={{ fontSize: 11, color: T.dim, marginLeft: 6 }}>(基于上季 {events.earnings.lastQuarter} 推算)</span>}
+                          <span style={{ fontSize: 13, color: T.muted, marginLeft: 10 }}>{events.earnings.date}</span>
+                          {events.earnings.hour && events.earnings.hour !== "TBD" && <span style={{ fontSize: 12, color: T.dim, marginLeft: 6 }}>({events.earnings.hour})</span>}
                         </div>
-                        <Badge text={events.earnings.estimated ? "预估日期" : "风控触发"} color={events.earnings.estimated ? T.yellow : T.red} />
+                        <Badge text={events.earnings.estimated ? "预估日期" : `准确日期 · ${events.earnings.source || "Nasdaq"}`} color={events.earnings.estimated ? T.yellow : T.green} />
                       </div>
-                      {events.earnings.lastRevenue && (
-                        <div style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>
-                          <span style={{ marginRight: 14 }}>上季营收: {result.cur}{fmt(events.earnings.lastRevenue)}</span>
-                          {events.earnings.lastEps != null && <span>上季EPS: {result.cur}{events.earnings.lastEps.toFixed(2)}</span>}
-                        </div>
-                      )}
+                      <div style={{ fontSize: 12, color: T.muted, marginTop: 4, display: "flex", gap: 14, flexWrap: "wrap" }}>
+                        {events.earnings.fiscalQuarterEnding && <span>财报季度: {events.earnings.fiscalQuarterEnding}</span>}
+                        {events.earnings.epsForecast != null && <span>EPS 预期: ${events.earnings.epsForecast.toFixed(2)}</span>}
+                        {events.earnings.lastYearEPS != null && <span>去年同期EPS: ${events.earnings.lastYearEPS.toFixed(2)}</span>}
+                        {events.earnings.analystCount != null && <span>{events.earnings.analystCount}位分析师预估</span>}
+                        {events.earnings.lastQuarter && <span>上季: {events.earnings.lastQuarter}</span>}
+                      </div>
                     </div>
                   )}
                   {/* Macro events timeline */}

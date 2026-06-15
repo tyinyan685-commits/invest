@@ -12,7 +12,59 @@ export default async function handler(req, res) {
     const today = new Date();
     const fmtDate = (d) => d.toISOString().slice(0, 10);
 
-    // Parallel: quarterly income (for earnings estimate) + key economic series
+    // Parallel: quarterly income (fallback) + key economic series + Nasdaq earnings search
+    // First, generate list of upcoming business days to search
+    const searchDates = [];
+    for (let i = 1; i <= 60 && searchDates.length < 30; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      if (d.getDay() !== 0 && d.getDay() !== 6) searchDates.push(fmtDate(d));
+    }
+
+    // Query Nasdaq earnings calendar in parallel batches of 8
+    let earnings = null;
+    const NASDAQ = "https://api.nasdaq.com/api/calendar/earnings";
+    const nasdaqHeaders = {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+      "Accept": "application/json",
+    };
+
+    for (let batch = 0; batch < searchDates.length && !earnings; batch += 8) {
+      const batchDates = searchDates.slice(batch, batch + 8);
+      const results = await Promise.all(
+        batchDates.map(async (date) => {
+          try {
+            const r = await fetch(`${NASDAQ}?date=${date}`, {
+              headers: nasdaqHeaders,
+              signal: AbortSignal.timeout(8000),
+            });
+            const d = await r.json();
+            return { date, rows: d?.data?.rows || [] };
+          } catch (e) {
+            return { date, rows: [] };
+          }
+        })
+      );
+      for (const { date, rows } of results) {
+        const match = rows.find(r => r.symbol === symbol);
+        if (match) {
+          earnings = {
+            date,
+            estimated: false,
+            hour: match.time === "time-after-hours" ? "\u76D8\u540E" : match.time === "time-pre-market" ? "\u76D8\u524D" : "TBD",
+            epsForecast: match.epsForecast ? parseFloat(String(match.epsForecast).replace(/[$,]/g, "")) || null : null,
+            lastYearEPS: match.lastYearEPS ? parseFloat(String(match.lastYearEPS).replace(/[$,]/g, "")) || null : null,
+            lastYearDate: match.lastYearRptDt || null,
+            fiscalQuarterEnding: match.fiscalQuarterEnding || null,
+            analystCount: match.noOfEsts ? parseInt(match.noOfEsts) : null,
+            source: "Nasdaq",
+          };
+          break;
+        }
+      }
+    }
+
+    // Parallel: quarterly income (for earnings fallback) + key economic series
     const [qIncRes, cpiRes, ppiRes, unrateRes, payRes, fomcRes] = await Promise.all([
       fetchJSON(`${FMP}/income-statement?symbol=${symbol}&apikey=${FMP_KEY}&limit=4&period=quarter`),
       fetchJSON(`${FRED}/series/observations?series_id=CPIAUCSL&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`),
@@ -22,30 +74,28 @@ export default async function handler(req, res) {
       fetchJSON(`${FRED}/series/observations?series_id=FEDFUNDS&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
     ]);
 
-    // --- 1. Estimate next earnings date from quarterly filings ---
-    let earnings = null;
-    if (Array.isArray(qIncRes) && qIncRes.length > 0) {
+    // Fallback: estimate earnings from quarterly income pattern if Nasdaq didn't find it
+    if (!earnings && Array.isArray(qIncRes) && qIncRes.length > 0) {
       const latest = qIncRes[0];
-      const latestDate = latest.date ? new Date(latest.date) : null;
+      const acceptedDate = latest.acceptedDate ? new Date(latest.acceptedDate.split(" ")[0]) : null;
+      const latestDate = acceptedDate || (latest.date ? new Date(latest.date) : null);
       if (latestDate) {
-        // Next earnings ≈ 90 days after most recent quarter end
         const estNext = new Date(latestDate);
         estNext.setDate(estNext.getDate() + 90);
-        // If estimated date is in the past, add another quarter
         if (estNext < today) estNext.setDate(estNext.getDate() + 90);
-        const qLabel = latest.period || "";
         earnings = {
           date: fmtDate(estNext),
           estimated: true,
-          lastQuarter: `${qLabel} (${fmtDate(latestDate)})`,
+          hour: "TBD",
+          lastQuarter: `${latest.period || ""} (${fmtDate(latestDate)})`,
           lastRevenue: latest.revenue || null,
           lastEps: latest.epsDiluted || latest.eps || null,
+          source: "estimated",
         };
       }
     }
 
     // --- 2. Build macro calendar from known schedules + FRED data ---
-    // Known 2026 FOMC meeting dates (Federal Reserve schedule)
     const fomcDates2026 = [
       "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
       "2026-07-29", "2026-09-16", "2026-11-04", "2026-12-16",
@@ -53,63 +103,33 @@ export default async function handler(req, res) {
 
     const macroEvents = [];
 
-    // Add upcoming FOMC dates
     for (const d of fomcDates2026) {
       if (new Date(d) > today) {
-        macroEvents.push({
-          date: d,
-          name: "FOMC 利率决议",
-          icon: "\u{1F3E6}",
-          impact: "\u6700\u9AD8",
-          source: "Federal Reserve",
-        });
-        break; // Only show the next FOMC
+        macroEvents.push({ date: d, name: "FOMC \u5229\u7387\u51B3\u8BAE", icon: "\u{1F3E6}", impact: "\u6700\u9AD8", source: "Federal Reserve" });
+        break;
       }
     }
 
-    // Estimate next CPI release (usually ~13th of each month)
     const nextCPI = new Date(today);
     nextCPI.setDate(13);
     if (nextCPI <= today) nextCPI.setMonth(nextCPI.getMonth() + 1);
-    macroEvents.push({
-      date: fmtDate(nextCPI),
-      name: "CPI \u6570\u636E\u53D1\u5E03",
-      icon: "\u{1F4CA}",
-      impact: "\u9AD8",
-      source: "BLS",
-    });
+    macroEvents.push({ date: fmtDate(nextCPI), name: "CPI \u6570\u636E\u53D1\u5E03", icon: "\u{1F4CA}", impact: "\u9AD8", source: "BLS" });
 
-    // Estimate next PPI release (usually ~15th of each month, after CPI)
     const nextPPI = new Date(today);
     nextPPI.setDate(15);
     if (nextPPI <= today) nextPPI.setMonth(nextPPI.getMonth() + 1);
-    macroEvents.push({
-      date: fmtDate(nextPPI),
-      name: "PPI \u6570\u636E\u53D1\u5E03",
-      icon: "\u{1F4C8}",
-      impact: "\u4E2D-\u9AD8",
-      source: "BLS",
-    });
+    macroEvents.push({ date: fmtDate(nextPPI), name: "PPI \u6570\u636E\u53D1\u5E03", icon: "\u{1F4C8}", impact: "\u4E2D-\u9AD8", source: "BLS" });
 
-    // Estimate next Non-Farm Payrolls (usually first Friday of month)
     const nextNFP = new Date(today);
     nextNFP.setDate(1);
-    // Find first Friday
     while (nextNFP.getDay() !== 5) nextNFP.setDate(nextNFP.getDate() + 1);
     if (nextNFP <= today) {
       nextNFP.setMonth(nextNFP.getMonth() + 1);
       nextNFP.setDate(1);
       while (nextNFP.getDay() !== 5) nextNFP.setDate(nextNFP.getDate() + 1);
     }
-    macroEvents.push({
-      date: fmtDate(nextNFP),
-      name: "\u975E\u519C\u5C31\u4E1A\u62A5\u544A",
-      icon: "\u{1F477}",
-      impact: "\u9AD8",
-      source: "BLS",
-    });
+    macroEvents.push({ date: fmtDate(nextNFP), name: "\u975E\u519C\u5C31\u4E1A\u62A5\u544A", icon: "\u{1F477}", impact: "\u9AD8", source: "BLS" });
 
-    // Sort by date
     macroEvents.sort((a, b) => (a.date > b.date ? 1 : -1));
 
     // --- 3. Latest economic indicators with YoY ---
@@ -125,12 +145,11 @@ export default async function handler(req, res) {
       return { value: v, prev: pv, change: +(v - pv).toFixed(2), date: latest.date };
     };
 
-    // CPI: calculate YoY (compare with 12 months ago)
     const parseYoY = (res) => {
       if (!res?.observations?.length) return null;
       const obs = res.observations;
       const latest = obs[0];
-      const yearAgo = obs[obs.length - 1]; // last in array (oldest)
+      const yearAgo = obs[obs.length - 1];
       if (!latest?.value || latest.value === ".") return null;
       const v = parseFloat(latest.value);
       const yv = yearAgo ? parseFloat(yearAgo.value) : v;
