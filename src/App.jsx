@@ -178,9 +178,9 @@ const fetchEvents = async (symbol) => {
 
 // Futu OpenD bridge - local proxy for real options IV data
 const FUTU_BRIDGE = "http://localhost:9876";
-const fetchIV = async (symbol) => {
+const fetchIV = async (symbol, price) => {
   try {
-    const r = await fetch(`${FUTU_BRIDGE}/api/option-volatility?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(5000) });
+    const r = await fetch(`${FUTU_BRIDGE}/api/option-volatility?symbol=${encodeURIComponent(symbol)}&price=${price}`, { signal: AbortSignal.timeout(8000) });
     const d = await r.json();
     return d;
   } catch (e) { return { ok: false, error: e.message }; }
@@ -730,7 +730,7 @@ export default function StockAnalysisTool() {
     }
 
     // 4b. Try to fetch real options IV from Futu OpenD bridge (optional, local only)
-    const iv = await fetchIV(t);
+    const iv = await fetchIV(t, analysis.price);
     setIvData(iv.ok ? iv : null);
     if (iv.ok) {
       status.push({ name: "期权IV", ok: true, note: `IV ${iv.avg_iv}%, HV ${iv.avg_hv}%, 溢价 ${iv.vol_premium}% (${iv.contracts_scanned}合约)` });
