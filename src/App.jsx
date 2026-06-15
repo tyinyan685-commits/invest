@@ -870,7 +870,6 @@ export default function StockAnalysisTool() {
                     ) : (
                       <div style={{ fontSize: 14, color: T.dim, padding: "4px 0" }}>N/A — 财务数据不可用，无法评分</div>
                     )}
-                    </div>
                   </div>
                 </Card>
                 <Card style={{ flex: "1 1 320px", minWidth: 280 }}>
