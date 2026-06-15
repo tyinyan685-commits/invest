@@ -70,6 +70,7 @@ const fmt = (n) => {
 };
 const pct = (n) => (n >= 0 ? "+" : "") + n.toFixed(1) + "%";
 const safeNum = (v, fallback = 0) => (v != null && !isNaN(v) && isFinite(v)) ? v : fallback;
+const naOr = (v, fmtFn) => (v != null && v !== 0) ? fmtFn(v) : "N/A";
 
 // ═══════════════════ PRICE GENERATOR (DEMO) ═══════════════════
 const genPrices = (cur, days, vol) => {
@@ -174,9 +175,10 @@ const mergeLiveWithPreset = (ticker, prof) => {
 
   // Merge with preset if available
   const preset = PRESETS[ticker];
-  const fin = preset ? preset.fin : {
-    pe: 20, fwdPE: 18, pb: 3, rev: 0, revG: 0, ni: 0, niG: 0,
-    cash: 0, ocf: 0, gm: 40, nm: 15, roe: 15, overR: 0, divY: +divY.toFixed(2), da: 0,
+  const fin = preset ? { ...preset.fin, finAvailable: "preset" } : {
+    pe: null, fwdPE: null, pb: null, rev: 0, revG: 0, ni: 0, niG: 0,
+    cash: 0, ocf: 0, gm: null, nm: null, roe: null, overR: 0, divY: +divY.toFixed(2), da: 0,
+    finAvailable: false,
   };
   // Always override dividend yield with live data
   fin.divY = +divY.toFixed(2);
@@ -557,13 +559,15 @@ export default function StockAnalysisTool() {
         roe: fin.roe,
         ocf: fin.revenue * 0.4, // estimate
         cash: fin.netIncome * 0.7, // estimate
+        finAvailable: "live",
       };
       const updatedAnalysis = { ...analysis, fin: updatedFin, finSource: "live" };
       setResult(updatedAnalysis);
       status.push({ name: "财务报表", ok: true, note: `PE ${realPE}x, 营收 ${fmt(fin.revenue)}, EPS $${fin.eps.toFixed(2)}` });
     } else {
       setFinData(null);
-      status.push({ name: "财务报表", ok: false, note: fin.error || "FMP 无数据 (预设值)" });
+      const hasPreset = !!PRESETS[t];
+      status.push({ name: "财务报表", ok: hasPreset, note: hasPreset ? "预设数据" : (fin.error ? fin.error : `${t} 财务报表需 FMP 付费套餐`) });
     }
     status.push({ name: "分析师预测", ok: false, note: "需FMP付费套餐" });
 
@@ -721,8 +725,8 @@ export default function StockAnalysisTool() {
           {tab === "overview" && (
             <div>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-                <MetricCard label="Forward PE" value={result.fin.fwdPE + "x"} sub={`行业 ${result.peers[2]?.pe || "-"}x`} color={result.fin.fwdPE < 25 ? T.green : T.yellow} highlight={T.blue} />
-                <MetricCard label="营收增速" value={pct(result.fin.revG)} sub={`净利润 ${pct(result.fin.niG)}`} color={result.fin.revG > 20 ? T.green : T.yellow} highlight={T.green} />
+                <MetricCard label="Forward PE" value={result.fin.fwdPE != null ? result.fin.fwdPE + "x" : "N/A"} sub={`行业 ${result.peers[2]?.pe || "-"}x`} color={result.fin.fwdPE != null && result.fin.fwdPE < 25 ? T.green : result.fin.fwdPE != null ? T.yellow : T.dim} highlight={T.blue} />
+                <MetricCard label="营收增速" value={result.fin.revG ? pct(result.fin.revG) : "N/A"} sub={`净利润 ${result.fin.niG ? pct(result.fin.niG) : "N/A"}`} color={result.fin.revG > 20 ? T.green : result.fin.revG > 0 ? T.yellow : result.fin.revG ? T.red : T.dim} highlight={T.green} />
                 <MetricCard label="RSI (14)" value={result.tech.rsi.toFixed(1)} sub={result.tech.rsi > 55 ? "偏多动能" : result.tech.rsi < 45 ? "偏弱" : "中性区间"} color={result.tech.rsi > 70 ? T.red : result.tech.rsi > 55 ? T.green : T.yellow} highlight={T.purple} />
                 <MetricCard label="MACD" value={result.tech.macd > result.tech.signal ? "金叉" : "死叉"} sub={`柱状 ${result.tech.hist > 0 ? "+" : ""}${result.tech.hist.toFixed(3)}`} color={result.tech.macd > result.tech.signal ? T.green : T.red} highlight={T.orange} />
                 <MetricCard label="ATR 波动率" value={result.tech.atrPct.toFixed(1) + "%"} sub={result.pos.overAlloc} color={result.tech.atrPct > 4 ? T.red : T.yellow} highlight={T.cyan} />
@@ -824,12 +828,12 @@ export default function StockAnalysisTool() {
                   <SectionTitle icon="&#x1F4B0;">估值指标</SectionTitle>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     {[
-                      { l: "PE (TTM)", v: result.fin.pe + "x" },
-                      { l: "Forward PE", v: result.fin.fwdPE + "x", hl: T.blue },
-                      { l: "PB", v: result.fin.pb + "x" },
+                      { l: "PE (TTM)", v: result.fin.pe != null ? result.fin.pe + "x" : "N/A" },
+                      { l: "Forward PE", v: result.fin.fwdPE != null ? result.fin.fwdPE + "x" : "N/A", hl: T.blue },
+                      { l: "PB", v: result.fin.pb != null ? result.fin.pb + "x" : "N/A" },
                       { l: "股息率", v: result.fin.divY.toFixed(2) + "%" },
-                      { l: "ROE", v: result.fin.roe.toFixed(1) + "%" },
-                      { l: "毛利率", v: result.fin.gm.toFixed(1) + "%" },
+                      { l: "ROE", v: result.fin.roe != null ? result.fin.roe.toFixed(1) + "%" : "N/A" },
+                      { l: "毛利率", v: result.fin.gm != null ? result.fin.gm.toFixed(1) + "%" : "N/A" },
                     ].map((m, i) => (
                       <div key={i} style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8, borderLeft: m.hl ? `3px solid ${m.hl}` : "none" }}>
                         <div style={{ fontSize: 11, color: T.muted }}>{m.l}</div>
@@ -852,17 +856,17 @@ export default function StockAnalysisTool() {
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>营收</div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.cur}{fmt(result.fin.rev)}</div>
-                      <div style={{ fontSize: 12, color: result.fin.revG > 0 ? T.green : T.red }}>{pct(result.fin.revG)}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.rev ? result.cur + fmt(result.fin.rev) : "N/A"}</div>
+                      <div style={{ fontSize: 12, color: result.fin.revG > 0 ? T.green : result.fin.revG < 0 ? T.red : T.dim }}>{result.fin.revG ? pct(result.fin.revG) : "—"}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>净利润</div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.cur}{fmt(result.fin.ni)}</div>
-                      <div style={{ fontSize: 12, color: result.fin.niG > 0 ? T.green : T.red }}>{pct(result.fin.niG)}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.ni ? result.cur + fmt(result.fin.ni) : "N/A"}</div>
+                      <div style={{ fontSize: 12, color: result.fin.niG > 0 ? T.green : result.fin.niG < 0 ? T.red : T.dim }}>{result.fin.niG ? pct(result.fin.niG) : "—"}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>净利率</div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.nm.toFixed(1)}%</div>
+                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.nm != null ? result.fin.nm.toFixed(1) + "%" : "N/A"}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>经营现金流</div>
