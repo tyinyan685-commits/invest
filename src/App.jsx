@@ -12,6 +12,7 @@ const T = {
   border: "#334155", text: "#e2e8f0", muted: "#94a3b8", dim: "#64748b",
   green: "#22c55e", red: "#ef4444", yellow: "#eab308",
   blue: "#3b82f6", purple: "#a855f7", orange: "#f97316", cyan: "#06b6d4",
+  lime: "#84cc16",
 };
 
 // ═══════════════════ MATH HELPERS ═══════════════════
@@ -381,6 +382,15 @@ function runAnalysis(ticker, stockData, dataSource) {
     bollLower = +(bbMean - 2 * bbStd).toFixed(2);
   }
 
+  // VWMA (20-day Volume Weighted Moving Average) — confirms trend with volume
+  let vwma = null;
+  if (closes.length >= 20) {
+    const rp = closes.slice(-20);
+    const rv = prices.slice(-20).map(d => d.volume || 0);
+    const tv = rv.reduce((a, b) => a + b, 0);
+    if (tv > 0) vwma = +(rp.reduce((s, p, i) => s + p * rv[i], 0) / tv).toFixed(2);
+  }
+
   // Chart data — show last 80 bars (or all if less)
   const chartLen = Math.min(80, prices.length);
   const chartData = prices.slice(-chartLen).map((d, i) => {
@@ -410,6 +420,12 @@ function runAnalysis(ticker, stockData, dataSource) {
     if (curPrice > bollUpper) signals.push({ name: "Boll", val: "上轨上方", sig: "超买区间", color: T.red });
     else if (curPrice < bollLower) signals.push({ name: "Boll", val: "下轨下方", sig: "超卖区间", color: T.green });
     else signals.push({ name: "Boll", val: `${bollLower}-${bollUpper}`, sig: "区间内运行", color: T.yellow });
+  }
+  // Add VWMA signal (volume-price trend confirmation)
+  if (vwma) {
+    const curPrice = closes[closes.length - 1];
+    const aboveVwma = curPrice > vwma;
+    signals.push({ name: "VWMA", val: vwma.toFixed(1), sig: aboveVwma ? "量价确认多头" : "量价背离(弱)", color: aboveVwma ? T.green : T.yellow });
   }
 
   // Use real 52-week high/low from historical data if available
@@ -475,6 +491,7 @@ function runAnalysis(ticker, stockData, dataSource) {
     ticker, ...p, high52, low52, prices, chartData, closes, dataSource,
     tech: { sma20: curSMA20, sma50: curSMA50, sma200: curSMA200, ema10: ema10[ema10.length - 1], rsi: curRSI, macd: curMACD, signal: curSignal, hist: macdHist, atr: curATR, atrPct, avgVol, signals, priceVs52h, priceVsSMA200,
       boll: { mid: bollMid, upper: bollUpper, lower: bollLower },
+      vwma,
       levels: { pivot: +pivot.toFixed(2), s1, s2, s3, r1, r2, r3 },
       historyLen: closes.length, isRealHistory: hasHistory },
     fundScore, techScore, radarData,
@@ -642,7 +659,7 @@ export default function StockAnalysisTool() {
       const bookValuePS = fin.roe > 0 ? (fin.eps / (fin.roe / 100)) : 0;
       const realPB = bookValuePS > 0 ? +(analysis.price / bookValuePS).toFixed(1) : 0;
 
-      // Override fin data in analysis result
+      // Override fin data in analysis result — use real balance sheet / cash flow where available
       const updatedFin = {
         ...analysis.fin,
         pe: realPE,
@@ -655,19 +672,38 @@ export default function StockAnalysisTool() {
         gm: fin.grossMargin,
         nm: fin.netMargin,
         roe: fin.roe,
-        ocf: fin.revenue * 0.4, // estimate
-        cash: fin.netIncome * 0.7, // estimate
+        epsGrowth: fin.epsGrowth ?? null,
+        // Real data from balance sheet / cash flow (fallback to estimate if not available)
+        ocf: fin.operatingCF ?? fin.revenue * 0.4,
+        cash: fin.cash ?? fin.netIncome * 0.7,
+        // New fields from P1 — balance sheet & cash flow
+        totalDebt: fin.totalDebt ?? null,
+        netDebt: fin.netDebt ?? null,
+        totalAssets: fin.totalAssets ?? null,
+        totalLiabilities: fin.totalLiabilities ?? null,
+        totalEquity: fin.totalEquity ?? null,
+        debtToEquity: fin.debtToEquity ?? null,
+        freeCashFlow: fin.freeCashFlow ?? null,
+        capitalExpenditure: fin.capitalExpenditure ?? null,
+        operatingCF: fin.operatingCF ?? null,
+        // Analyst price targets
+        analystTarget: fin.analystTarget ?? null,
         finAvailable: "live",
       };
       analysis = { ...analysis, fin: updatedFin, finSource: "live" };
       setResult(analysis);
-      status.push({ name: "财务报表", ok: true, note: `PE ${realPE}x, 营收 ${fmt(fin.revenue)}, EPS $${fin.eps.toFixed(2)}` });
+      status.push({ name: "财务报表", ok: true, note: `PE ${realPE}x, 营收 ${fmt(fin.revenue)}, EPS $${fin.eps.toFixed(2)}${fin.operatingCF ? ", OCF " + fmt(fin.operatingCF) : ""}${fin.cash ? ", 现金 " + fmt(fin.cash) : ""}` });
+      if (fin.analystTarget?.avgTarget) {
+        status.push({ name: "分析师预测", ok: true, note: `${fin.analystTarget.count}位分析师, 均价 $${fin.analystTarget.avgTarget.toFixed(1)}` });
+      } else {
+        status.push({ name: "分析师预测", ok: false, note: "分析师目标价不可用" });
+      }
     } else {
       setFinData(null);
       const hasPreset = !!PRESETS[t];
       status.push({ name: "财务报表", ok: hasPreset, note: hasPreset ? "预设数据" : (fin.error ? fin.error : `${t} 财务报表需 FMP 付费套餐`) });
+      status.push({ name: "分析师预测", ok: false, note: "需FMP付费套餐" });
     }
-    status.push({ name: "分析师预测", ok: false, note: "需FMP付费套餐" });
 
     setDataStatus(status);
     setLoading(false);
@@ -991,20 +1027,75 @@ export default function StockAnalysisTool() {
                       <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.nm != null ? result.fin.nm.toFixed(1) + "%" : "N/A"}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
-                      <div style={{ fontSize: 11, color: T.muted }}>经营现金流</div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.cur}{fmt(result.fin.ocf)}</div>
+                      <div style={{ fontSize: 11, color: T.muted }}>经营现金流 {result.finSource === "live" && result.fin.operatingCF ? <Badge text="实时" color={T.green} /> : ""}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.ocf ? result.cur + fmt(result.fin.ocf) : "N/A"}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
-                      <div style={{ fontSize: 11, color: T.muted }}>净现金</div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: result.fin.cash > 0 ? T.green : T.red }}>{result.cur}{fmt(result.fin.cash)}</div>
+                      <div style={{ fontSize: 11, color: T.muted }}>自由现金流 {result.finSource === "live" && result.fin.freeCashFlow ? <Badge text="实时" color={T.green} /> : ""}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: (result.fin.freeCashFlow || result.fin.ocf) > 0 ? T.green : T.red }}>{result.fin.freeCashFlow ? result.cur + fmt(result.fin.freeCashFlow) : (result.fin.ocf ? result.cur + fmt(result.fin.ocf * 0.7) : "N/A")}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
-                      <div style={{ fontSize: 11, color: T.muted }}>负债/资产</div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{(result.fin.da / Math.max(result.fin.rev, 1) * 100).toFixed(0)}%</div>
+                      <div style={{ fontSize: 11, color: T.muted }}>现金及等价物 {result.finSource === "live" && result.fin.cash ? <Badge text="实时" color={T.green} /> : ""}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: result.fin.cash > 0 ? T.green : T.red }}>{result.fin.cash ? result.cur + fmt(result.fin.cash) : "N/A"}</div>
+                    </div>
+                    <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>总负债 {result.finSource === "live" && result.fin.totalDebt ? <Badge text="实时" color={T.green} /> : ""}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.totalDebt ? result.cur + fmt(result.fin.totalDebt) : "N/A"}</div>
+                    </div>
+                    <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>D/E 负债率 {result.finSource === "live" && result.fin.debtToEquity != null ? <Badge text="实时" color={T.green} /> : ""}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: result.fin.debtToEquity != null ? (result.fin.debtToEquity > 100 ? T.red : result.fin.debtToEquity > 50 ? T.yellow : T.green) : T.text }}>
+                        {result.fin.debtToEquity != null ? result.fin.debtToEquity.toFixed(1) + "%" : (result.fin.da ? (result.fin.da / Math.max(result.fin.rev, 1) * 100).toFixed(0) + "%" : "N/A")}
+                      </div>
+                    </div>
+                    <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>EPS 增速</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: result.fin.epsGrowth > 0 ? T.green : result.fin.epsGrowth < 0 ? T.red : T.dim }}>
+                        {result.fin.epsGrowth != null ? pct(result.fin.epsGrowth) : "N/A"}
+                      </div>
                     </div>
                   </div>
                 </Card>
               </div>
+              {/* Analyst Price Targets */}
+              {result.fin.analystTarget?.avgTarget && (
+                <Card style={{ marginBottom: 16 }}>
+                  <SectionTitle icon="&#x1F3AF;">分析师目标价共识 <Badge text={`${result.fin.analystTarget.count || "?"}位分析师`} color={T.blue} /></SectionTitle>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10 }}>
+                    <div style={{ background: T.cardAlt, padding: "12px 14px", borderRadius: 8, borderLeft: `3px solid ${T.blue}` }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>近1月目标均价</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: T.blue }}>{result.cur}{result.fin.analystTarget.avgTarget.toFixed(1)}</div>
+                      {result.fin.analystTarget.count > 0 && <div style={{ fontSize: 11, color: T.dim }}>{result.fin.analystTarget.count}位分析师覆盖</div>}
+                    </div>
+                    {result.fin.analystTarget.avgTargetQuarter && (
+                      <div style={{ background: T.cardAlt, padding: "12px 14px", borderRadius: 8 }}>
+                        <div style={{ fontSize: 11, color: T.muted }}>近1季目标均价</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: T.text }}>{result.cur}{result.fin.analystTarget.avgTargetQuarter.toFixed(1)}</div>
+                      </div>
+                    )}
+                    {result.fin.analystTarget.avgTargetYear && (
+                      <div style={{ background: T.cardAlt, padding: "12px 14px", borderRadius: 8 }}>
+                        <div style={{ fontSize: 11, color: T.muted }}>近1年目标均价</div>
+                        <div style={{ fontSize: 22, fontWeight: 800, color: T.text }}>{result.cur}{result.fin.analystTarget.avgTargetYear.toFixed(1)}</div>
+                        {result.fin.analystTarget.countYear > 0 && <div style={{ fontSize: 11, color: T.dim }}>{result.fin.analystTarget.countYear}位分析师</div>}
+                      </div>
+                    )}
+                    <div style={{ background: T.cardAlt, padding: "12px 14px", borderRadius: 8 }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>距现价空间</div>
+                      {(() => {
+                        const upside = ((result.fin.analystTarget.avgTarget - result.price) / result.price * 100);
+                        return (
+                          <>
+                            <div style={{ fontSize: 22, fontWeight: 800, color: upside > 0 ? T.green : T.red }}>{upside > 0 ? "+" : ""}{upside.toFixed(1)}%</div>
+                            <div style={{ fontSize: 11, color: T.dim }}>{upside > 10 ? "分析师看好" : upside > 0 ? "温和看涨" : "目标价低于现价"}</div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 11, color: T.dim }}>来源: FMP price-target-summary · 基于卖方分析师近1月/1季/1年共识 · 仅供参考</div>
+                </Card>
+              )}
               <Card>
                 <SectionTitle icon="&#x1F50D;">可比公司估值对比</SectionTitle>
                 <ResponsiveContainer width="100%" height={220}>
@@ -1045,6 +1136,7 @@ export default function StockAnalysisTool() {
                   <span style={{ fontSize: 11, color: T.muted }}>SMA50: <b style={{ color: T.orange }}>{result.tech.sma50?.toFixed(1) || "-"}</b></span>
                   <span style={{ fontSize: 11, color: T.muted }}>SMA200: <b style={{ color: T.purple }}>{result.tech.sma200?.toFixed(1) || "-"}</b></span>
                   <span style={{ fontSize: 11, color: T.muted }}>EMA10: <b style={{ color: T.cyan }}>{result.tech.ema10?.toFixed(1) || "-"}</b></span>
+                  <span style={{ fontSize: 11, color: T.muted }}>VWMA20: <b style={{ color: T.lime }}>{result.tech.vwma?.toFixed(1) || "-"}</b></span>
                 </div>
               </Card>
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
@@ -1095,6 +1187,9 @@ export default function StockAnalysisTool() {
                     ...(result.tech.boll?.upper ? [
                       { l: "Boll 上轨", v: result.cur + result.tech.boll.upper, s: "中轨 " + result.cur + result.tech.boll.mid, c: T.orange },
                       { l: "Boll 下轨", v: result.cur + result.tech.boll.lower, s: `带宽 ${((result.tech.boll.upper - result.tech.boll.lower) / result.tech.boll.mid * 100).toFixed(1)}%`, c: T.orange },
+                    ] : []),
+                    ...(result.tech.vwma ? [
+                      { l: "VWMA20", v: result.cur + result.tech.vwma.toFixed(1), s: result.price > result.tech.vwma ? "价格>VWMA 量价多头" : "价格<VWMA 量价弱势", c: result.price > result.tech.vwma ? T.lime : T.yellow },
                     ] : []),
                   ].map((m, i) => (
                     <div key={i} style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
