@@ -168,6 +168,14 @@ const fetchHistory = async (symbol) => {
   } catch (e) { return { ok: false, error: e.message, bars: [], yearStartPrice: null }; }
 };
 
+const fetchEvents = async (symbol) => {
+  try {
+    const r = await fetch(`/api/events?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(12000) });
+    const d = await r.json();
+    return d;
+  } catch (e) { return { ok: false, error: e.message, earnings: null, macroEvents: [], indicators: {} }; }
+};
+
 // ═══════════════════ FMP PROFILE → ANALYSIS FORMAT ═══════════════════
 const mergeLiveWithPreset = (ticker, prof) => {
   const p = prof;
@@ -556,12 +564,13 @@ export default function StockAnalysisTool() {
   const [news, setNews] = useState(null);
   const [finData, setFinData] = useState(null);
   const [dataStatus, setDataStatus] = useState([]);
+  const [events, setEvents] = useState(null);
 
   const doAnalyze = useCallback(async (ticker) => {
     const t = ticker.trim().toUpperCase();
     if (!t) return;
     setLoading(true); setError(""); setActiveTicker(t); setTab("overview");
-    setSentiment(null); setMacro(null); setNews(null); setFinData(null); setDataStatus([]);
+    setSentiment(null); setMacro(null); setNews(null); setFinData(null); setDataStatus([]); setEvents(null);
 
     let stockData = null, dataSource = "demo";
     const status = [];
@@ -613,12 +622,13 @@ export default function StockAnalysisTool() {
     // 4. Fetch external data (sentiment, macro, news, financials, history) in parallel
     status.push({ name: "FMP 行情", ok: dataSource === "live", note: dataSource === "live" ? "实时价格/52周/市值" : "预设数据" });
 
-    const [sent, mac, nws, fin, hist] = await Promise.all([
+    const [sent, mac, nws, fin, hist, evts] = await Promise.all([
       fetchSentiment(t),
       fetchMacro(),
       fetchNews(stockData.name?.split(" ")[0] || t),
       fetchFinancials(t),
       fetchHistory(t),
+      fetchEvents(t),
     ]);
 
     // 4a. If real historical bars available, re-run analysis with real data
@@ -646,6 +656,14 @@ export default function StockAnalysisTool() {
 
     setMacro(mac);
     status.push({ name: "宏观数据", ok: mac.ok, note: mac.ok ? `10Y ${mac.yield10y}, FedFunds ${mac.fedFunds}` : mac.error });
+
+    setEvents(evts);
+    if (evts.ok) {
+      const evtCount = evts.macroEvents?.length || 0;
+      status.push({ name: "事件日历", ok: true, note: `未来2周 ${evtCount}个宏观事件${evts.earnings?.date ? `, 财报日 ${evts.earnings.date}` : ""}` });
+    } else {
+      status.push({ name: "事件日历", ok: false, note: evts.error || "事件数据不可用" });
+    }
 
     setNews(nws);
     status.push({ name: "新闻", ok: nws.ok, note: nws.ok ? `${nws.total}条相关新闻` : nws.error });
@@ -688,6 +706,8 @@ export default function StockAnalysisTool() {
         operatingCF: fin.operatingCF ?? null,
         // Analyst price targets
         analystTarget: fin.analystTarget ?? null,
+        // Quarterly trends (P2)
+        quarters: fin.quarters ?? null,
         finAvailable: "live",
       };
       analysis = { ...analysis, fin: updatedFin, finSource: "live" };
@@ -949,6 +969,62 @@ export default function StockAnalysisTool() {
                 </Card>
               )}
 
+              {/* P2-1: Macro Events Calendar */}
+              {events?.ok && (events.macroEvents?.length > 0 || events.earnings?.date) && (
+                <Card style={{ marginTop: 16 }}>
+                  <SectionTitle icon="&#x1F4C5;">事件日历 (未来2周) <Badge text={`${events.generatedAt} ~ ${events.endDate}`} color={T.dim} /></SectionTitle>
+                  {/* Earnings date (highest priority) */}
+                  {events.earnings?.date && (
+                    <div style={{ padding: "10px 14px", background: T.red + "12", borderRadius: 8, borderLeft: `3px solid ${T.red}`, marginBottom: 10 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                          <span style={{ fontSize: 14, fontWeight: 800, color: T.red }}>&#x1F6A8; {result.ticker} 财报发布</span>
+                          <span style={{ fontSize: 13, color: T.muted, marginLeft: 10 }}>{events.earnings.date} {events.earnings.hour === "BMO" ? "(盘前)" : events.earnings.hour === "AMC" ? "(盘后)" : ""}</span>
+                        </div>
+                        <Badge text="风控触发·最高" color={T.red} />
+                      </div>
+                      {(events.earnings.epsEstimate != null || events.earnings.revenueEstimate != null) && (
+                        <div style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>
+                          {events.earnings.epsEstimate != null && <span style={{ marginRight: 14 }}>EPS 预期: ${events.earnings.epsEstimate.toFixed(2)}</span>}
+                          {events.earnings.revenueEstimate != null && <span>营收预期: {result.cur}{fmt(events.earnings.revenueEstimate)}</span>}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {/* Macro events timeline */}
+                  {events.macroEvents.length > 0 && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 220, overflowY: "auto" }}>
+                      {events.macroEvents.map((ev, i) => (
+                        <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", background: T.cardAlt, borderRadius: 6, borderLeft: `3px solid ${ev.impact.includes("最高") ? T.red : ev.impact.includes("高") ? T.orange : ev.impact.includes("中") ? T.yellow : T.dim}` }}>
+                          <span style={{ fontSize: 11, color: T.dim, minWidth: 80, flexShrink: 0 }}>{ev.date}</span>
+                          <span style={{ fontSize: 14, flexShrink: 0 }}>{ev.icon}</span>
+                          <span style={{ fontSize: 13, color: T.text, flex: 1 }}>{ev.name}</span>
+                          <Badge text={`影响: ${ev.impact}`} color={ev.impact.includes("最高") ? T.red : ev.impact.includes("高") ? T.orange : ev.impact.includes("中") ? T.yellow : T.dim} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* Economic indicators snapshot */}
+                  {Object.keys(events.indicators || {}).length > 0 && (
+                    <div style={{ marginTop: 12, padding: "10px 12px", background: T.cardAlt, borderRadius: 8 }}>
+                      <div style={{ fontSize: 12, color: T.muted, marginBottom: 8 }}>最新经济指标</div>
+                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                        {Object.entries(events.indicators).map(([key, ind]) => (
+                          <div key={key} style={{ flex: "1 1 120px", minWidth: 100 }}>
+                            <div style={{ fontSize: 11, color: T.dim }}>{ind.label}</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{ind.value}{ind.unit}</div>
+                            <div style={{ fontSize: 11, color: ind.change > 0 ? T.red : ind.change < 0 ? T.green : T.dim }}>
+                              {ind.change > 0 ? "+" : ""}{ind.change} vs上期
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ marginTop: 8, fontSize: 10, color: T.dim }}>来源: FRED releases + FMP earnings-calendar · 仅供参考</div>
+                </Card>
+              )}
+
               {/* Recent News */}
               {news && news.ok && news.articles.length > 0 && (
                 <Card style={{ marginTop: 16 }}>
@@ -1057,6 +1133,69 @@ export default function StockAnalysisTool() {
                   </div>
                 </Card>
               </div>
+              {/* P2-2: Quarterly Trends (Q-over-Q) */}
+              {result.fin.quarters && result.fin.quarters.length >= 2 && (
+                <Card style={{ marginBottom: 16 }}>
+                  <SectionTitle icon="&#x1F4C8;">季度环比趋势 <Badge text={`${result.fin.quarters.length}个季度`} color={T.cyan} /></SectionTitle>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                          <th style={{ padding: "8px 10px", textAlign: "left", color: T.muted, fontWeight: 600 }}>季度</th>
+                          <th style={{ padding: "8px 10px", textAlign: "right", color: T.muted, fontWeight: 600 }}>营收</th>
+                          <th style={{ padding: "8px 10px", textAlign: "right", color: T.muted, fontWeight: 600 }}>环比</th>
+                          <th style={{ padding: "8px 10px", textAlign: "right", color: T.muted, fontWeight: 600 }}>净利润</th>
+                          <th style={{ padding: "8px 10px", textAlign: "right", color: T.muted, fontWeight: 600 }}>环比</th>
+                          <th style={{ padding: "8px 10px", textAlign: "right", color: T.muted, fontWeight: 600 }}>毛利率</th>
+                          <th style={{ padding: "8px 10px", textAlign: "right", color: T.muted, fontWeight: 600 }}>净利率</th>
+                          <th style={{ padding: "8px 10px", textAlign: "right", color: T.muted, fontWeight: 600 }}>EPS</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.fin.quarters.map((q, i) => {
+                          const prev = result.fin.quarters[i + 1];
+                          const revQoQ = prev?.revenue ? ((q.revenue - prev.revenue) / prev.revenue * 100) : null;
+                          const niQoQ = prev?.netIncome ? ((q.netIncome - prev.netIncome) / Math.abs(prev.netIncome) * 100) : null;
+                          return (
+                            <tr key={i} style={{ borderBottom: `1px solid ${T.border}33` }}>
+                              <td style={{ padding: "8px 10px", color: i === 0 ? T.blue : T.text, fontWeight: i === 0 ? 700 : 400 }}>
+                                {q.date ? new Date(q.date).toISOString().slice(0, 7) : q.period}
+                                {i === 0 && <span style={{ marginLeft: 6, fontSize: 10, color: T.blue }}>最新</span>}
+                              </td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", color: T.text, fontWeight: 600 }}>{q.revenue ? result.cur + fmt(q.revenue) : "—"}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", color: revQoQ != null ? (revQoQ > 0 ? T.green : revQoQ < 0 ? T.red : T.dim) : T.dim, fontWeight: 600 }}>
+                                {revQoQ != null ? (revQoQ > 0 ? "+" : "") + revQoQ.toFixed(1) + "%" : "—"}
+                              </td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", color: T.text }}>{q.netIncome ? result.cur + fmt(q.netIncome) : "—"}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", color: niQoQ != null ? (niQoQ > 0 ? T.green : niQoQ < 0 ? T.red : T.dim) : T.dim, fontWeight: 600 }}>
+                                {niQoQ != null ? (niQoQ > 0 ? "+" : "") + niQoQ.toFixed(1) + "%" : "—"}
+                              </td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", color: q.grossMargin > 50 ? T.green : T.text }}>{q.grossMargin.toFixed(1)}%</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", color: q.netMargin > 20 ? T.green : T.text }}>{q.netMargin.toFixed(1)}%</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", color: T.text, fontWeight: 600 }}>{q.eps ? result.cur + q.eps.toFixed(2) : "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {result.fin.quarters.length >= 2 && (() => {
+                    const latest = result.fin.quarters[0];
+                    const oldest = result.fin.quarters[result.fin.quarters.length - 1];
+                    const revTrend = oldest.revenue > 0 ? ((latest.revenue - oldest.revenue) / oldest.revenue * 100) : 0;
+                    const niTrend = oldest.netIncome > 0 ? ((latest.netIncome - oldest.netIncome) / Math.abs(oldest.netIncome) * 100) : 0;
+                    return (
+                      <div style={{ marginTop: 10, padding: "8px 12px", background: T.cardAlt, borderRadius: 6, fontSize: 12, color: T.muted, lineHeight: 1.7 }}>
+                        <span style={{ color: T.cyan, fontWeight: 700 }}>趋势摘要:</span>{" "}
+                        从 {oldest.date ? new Date(oldest.date).toISOString().slice(0, 7) : "最早"} 到 {latest.date ? new Date(latest.date).toISOString().slice(0, 7) : "最新"}，
+                        营收<span style={{ color: revTrend > 0 ? T.green : T.red, fontWeight: 700 }}>{revTrend > 0 ? "增长" : "下降"} {Math.abs(revTrend).toFixed(1)}%</span>，
+                        净利润<span style={{ color: niTrend > 0 ? T.green : T.red, fontWeight: 700 }}>{niTrend > 0 ? "增长" : "下降"} {Math.abs(niTrend).toFixed(1)}%</span>
+                      </div>
+                    );
+                  })()}
+                  <div style={{ marginTop: 6, fontSize: 10, color: T.dim }}>来源: FMP income-statement (最近{result.fin.quarters.length}个季度) · 仅供参考</div>
+                </Card>
+              )}
               {/* Analyst Price Targets */}
               {result.fin.analystTarget?.avgTarget && (
                 <Card style={{ marginBottom: 16 }}>
@@ -1427,40 +1566,117 @@ export default function StockAnalysisTool() {
                 </div>
               )}
 
-              {/* Bull/Bear Debate */}
-              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 16 }}>
-                {/* Bull Case */}
-                <div style={{ flex: "1 1 300px", minWidth: 260 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                    <span style={{ color: T.green, fontSize: 16 }}>&#x1F7E2;</span>
-                    <span style={{ color: T.green, fontWeight: 700, fontSize: 14 }}>多头观点 (Bull Case)</span>
-                  </div>
-                  {result.bulls.map((b, i) => (
-                    <div key={i} style={{ padding: "8px 12px", background: T.green + "08", borderRadius: 6, marginBottom: 6, borderLeft: `2px solid ${T.green}` }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontWeight: 700, color: T.text }}>{b.t}</span>
-                        <Badge text={i === 0 ? "证据: 高" : i === 1 ? "证据: 中-高" : "证据: 中"} color={i === 0 ? T.green : T.yellow} />
-                      </div>
-                      <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.6 }}>{b.d}</div>
-                    </div>
-                  ))}
+              {/* P2-3: Structured Multi-Perspective Debate */}
+              <div style={{ marginBottom: 16, padding: "12px 14px", background: T.cardAlt, borderRadius: 8, border: `1px solid ${T.border}` }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: T.text, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+                  &#x2696;&#xFE0F; 多空博弈分析
+                  <Badge text={`${result.dataSource === "live" ? "实时数据" : "演示数据"}驱动`} color={result.dataSource === "live" ? T.green : T.yellow} />
                 </div>
-
-                {/* Bear Case */}
-                <div style={{ flex: "1 1 300px", minWidth: 260 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                    <span style={{ color: T.red, fontSize: 16 }}>&#x1F534;</span>
-                    <span style={{ color: T.red, fontWeight: 700, fontSize: 14 }}>空头观点 (Bear Case)</span>
-                  </div>
-                  {result.risks.map((r, i) => (
-                    <div key={i} style={{ padding: "8px 12px", background: T.red + "08", borderRadius: 6, marginBottom: 6, borderLeft: `2px solid ${T.red}` }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontWeight: 700, color: T.text }}>{r.t}</span>
-                        <RiskBadge level={r.l} />
-                      </div>
-                      <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.6 }}>{r.d}</div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  {/* Bull Case - Dynamic Evidence */}
+                  <div style={{ flex: "1 1 280px", minWidth: 240 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                      <span style={{ color: T.green, fontSize: 15 }}>&#x1F7E2;</span>
+                      <span style={{ color: T.green, fontWeight: 700, fontSize: 13 }}>激进派 (看多)</span>
                     </div>
-                  ))}
+                    {[
+                      // Generate bull arguments from real data
+                      { t: "估值与增长", d: result.fin.fwdPE && result.fin.revG > 0
+                        ? `Forward PE ${result.fin.fwdPE}x, 营收增速 ${result.fin.revG.toFixed(1)}%, PEG ${(result.fin.fwdPE / Math.max(result.fin.revG, 1)).toFixed(1)} — ${result.fin.fwdPE / Math.max(result.fin.revG, 1) < 1.5 ? "性价比优秀" : "估值合理"}`
+                        : result.bulls[0]?.d || "估值水平具有吸引力",
+                        ev: result.finSource === "live" ? "高" : "中" },
+                      { t: "技术面动能", d: result.tech.rsi > 50 && result.tech.macd > result.tech.signal
+                        ? `RSI ${result.tech.rsi.toFixed(0)} 偏强, MACD 金叉, ${result.price > result.tech.sma50 ? "站上50日均线" : "50日均线下方蓄势"}${result.tech.vwma && result.price > result.tech.vwma ? ", 量价确认" : ""}`
+                        : result.bulls[2]?.d || "技术面存在反弹信号",
+                        ev: result.tech.isRealHistory ? "高" : "低" },
+                      { t: "市场共识", d: result.fin.analystTarget?.avgTarget
+                        ? `${result.fin.analystTarget.count}位分析师均价 ${result.cur}${result.fin.analystTarget.avgTarget.toFixed(1)}, 距现价 ${((result.fin.analystTarget.avgTarget - result.price) / result.price * 100 > 0 ? "+" : "")}${((result.fin.analystTarget.avgTarget - result.price) / result.price * 100).toFixed(1)}%`
+                        : result.bulls[1]?.d || "机构持仓稳定",
+                        ev: result.fin.analystTarget?.avgTarget ? "高" : "中" },
+                    ].map((b, i) => (
+                      <div key={i} style={{ padding: "8px 10px", background: T.green + "08", borderRadius: 6, marginBottom: 5, borderLeft: `2px solid ${T.green}` }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontWeight: 700, color: T.text, fontSize: 12 }}>{b.t}</span>
+                          <Badge text={`证据: ${b.ev}`} color={b.ev === "高" ? T.green : b.ev === "中" ? T.yellow : T.dim} />
+                        </div>
+                        <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.6 }}>{b.d}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Neutral Perspective */}
+                  <div style={{ flex: "1 1 280px", minWidth: 240 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                      <span style={{ color: T.yellow, fontSize: 15 }}>&#x1F7E1;</span>
+                      <span style={{ color: T.yellow, fontWeight: 700, fontSize: 13 }}>中性派 (框架合理, 触发待验证)</span>
+                    </div>
+                    {[
+                      { t: "数据完整度", d: `实时行情: ${result.dataSource === "live" ? "✓" : "✗"}, 实时财务: ${result.finSource === "live" ? "✓" : "✗"}, 真实K线: ${result.tech.isRealHistory ? `${result.tech.historyLen}天` : "✗"}, 情绪: ${sentiment?.ok ? "✓" : "✗"}`, ev: "事实" },
+                      { t: "技术面分歧", d: result.tech.signals.length >= 4
+                        ? `${result.tech.signals.filter(s => s.color === T.green).length}多/${result.tech.signals.filter(s => s.color === T.red).length}空/${result.tech.signals.filter(s => s.color === T.yellow).length}中性 — 信号未完全一致, 需更多确认`
+                        : "技术指标不足, 无法形成一致判断",
+                        ev: result.tech.isRealHistory ? "中" : "低" },
+                      { t: "仓位建议", d: `当前 ATR ${result.tech.atrPct.toFixed(1)}%, ${result.tech.atrPct > 3 ? "波动较大, 宜轻仓试探" : result.tech.atrPct > 1.5 ? "波动适中, 可标准配置" : "波动较低, 可适当加仓"}. 首批不超40%`, ev: "中-高" },
+                    ].map((n, i) => (
+                      <div key={i} style={{ padding: "8px 10px", background: T.yellow + "08", borderRadius: 6, marginBottom: 5, borderLeft: `2px solid ${T.yellow}` }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontWeight: 700, color: T.text, fontSize: 12 }}>{n.t}</span>
+                          <Badge text={`证据: ${n.ev}`} color={n.ev === "高" ? T.green : n.ev === "事实" ? T.blue : n.ev === "中" ? T.yellow : T.dim} />
+                        </div>
+                        <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.6 }}>{n.d}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Bear Case - Dynamic Evidence */}
+                  <div style={{ flex: "1 1 280px", minWidth: 240 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                      <span style={{ color: T.red, fontSize: 15 }}>&#x1F534;</span>
+                      <span style={{ color: T.red, fontWeight: 700, fontSize: 13 }}>保守派 (风险警示)</span>
+                    </div>
+                    {result.risks.map((r, i) => (
+                      <div key={i} style={{ padding: "8px 10px", background: T.red + "08", borderRadius: 6, marginBottom: 5, borderLeft: `2px solid ${T.red}` }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span style={{ fontWeight: 700, color: T.text, fontSize: 12 }}>{r.t}</span>
+                          <RiskBadge level={r.l} />
+                        </div>
+                        <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.6 }}>{r.d}</div>
+                      </div>
+                    ))}
+                    {/* Additional bear argument from data */}
+                    <div style={{ padding: "8px 10px", background: T.red + "08", borderRadius: 6, marginBottom: 5, borderLeft: `2px solid ${T.red}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontWeight: 700, color: T.text, fontSize: 12 }}>距52周高</span>
+                        <Badge text={result.tech.priceVs52h > -10 ? "低" : "中"} color={result.tech.priceVs52h > -10 ? T.green : T.yellow} />
+                      </div>
+                      <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.6 }}>
+                        距高点 {pct(result.tech.priceVs52h)}, ${result.tech.isRealHistory ? "真实K线确认" : "模拟数据, 需验证"}
+                        {result.tech.boll?.upper && result.price > result.tech.boll.upper * 0.95 ? ", 接近布林上轨, 短期承压" : ""}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {/* Debate Synthesis */}
+                <div style={{ marginTop: 12, padding: "10px 14px", background: T.blue + "10", borderRadius: 8, borderLeft: `3px solid ${T.blue}` }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: T.blue, marginBottom: 4 }}>辩论结论</div>
+                  <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.8 }}>
+                    {(() => {
+                      const bullScore = result.tech.signals.filter(s => s.color === T.green).length;
+                      const bearScore = result.tech.signals.filter(s => s.color === T.red).length;
+                      const hasRealData = result.dataSource === "live" && result.finSource === "live";
+                      const hasEarnings = events?.earnings?.date;
+                      const upside = result.fin.analystTarget?.avgTarget ? ((result.fin.analystTarget.avgTarget - result.price) / result.price * 100) : null;
+                      return (
+                        <>
+                          {bullScore > bearScore ? "技术面偏多" : bullScore < bearScore ? "技术面偏空" : "技术面中性"},
+                          {" "}基本面{result.fin.revG > 30 ? "强劲增长" : result.fin.revG > 10 ? "稳健增长" : result.fin.revG > 0 ? "低速增长" : result.fin.revG < 0 ? "负增长" : "数据待确认"}。
+                          {upside != null && <> 分析师共识{upside > 10 ? "看涨 " + upside.toFixed(0) + "%" : upside > 0 ? "温和看涨" : "目标价低于现价"}。</>}
+                          {hasEarnings && <> 即将发布财报({events.earnings.date}), 事件前宜控制仓位。</>}
+                          {!hasRealData && <span style={{ color: T.yellow }}> ⚠ 部分数据非实时, 结论可靠性受限。</span>}
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
               </div>
 

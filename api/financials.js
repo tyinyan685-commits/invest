@@ -6,9 +6,9 @@ export default async function handler(req, res) {
   const opt = { signal: AbortSignal.timeout(12000) };
   const fetchJSON = (url) => fetch(url, opt).then(r => r.json()).catch(() => []);
   try {
-    // Fetch 6 endpoints in parallel
+    // Fetch 7 endpoints in parallel (income limit=5 for quarterly QoQ trends)
     const [incRes, kmRes, fgRes, bsRes, cfRes, ptRes] = await Promise.all([
-      fetchJSON(`${BASE}/income-statement?symbol=${symbol}&apikey=${KEY}&limit=2`),
+      fetchJSON(`${BASE}/income-statement?symbol=${symbol}&apikey=${KEY}&limit=5`),
       fetchJSON(`${BASE}/key-metrics?symbol=${symbol}&apikey=${KEY}&limit=1`),
       fetchJSON(`${BASE}/financial-growth?symbol=${symbol}&apikey=${KEY}&limit=1`),
       fetchJSON(`${BASE}/balance-sheet-statement?symbol=${symbol}&apikey=${KEY}&limit=1`),
@@ -82,6 +82,29 @@ export default async function handler(req, res) {
       countYear: pt.lastYearCount || 0,
     } : null;
 
+    // Quarterly trends (for QoQ display) — up to 5 quarters
+    const quarters = [];
+    if (Array.isArray(incRes) && incRes.length >= 2) {
+      for (let i = 0; i < Math.min(incRes.length, 5); i++) {
+        const q = incRes[i];
+        const rev = q.revenue || 0;
+        const ni = q.netIncome || 0;
+        const gp = q.grossProfit || 0;
+        const epsVal = q.epsDiluted || q.eps || 0;
+        quarters.push({
+          date: q.date || "",
+          period: q.period || "",
+          symbol: q.symbol || symbol,
+          revenue: rev,
+          netIncome: ni,
+          grossProfit: gp,
+          eps: epsVal,
+          grossMargin: rev > 0 ? +((gp / rev) * 100).toFixed(1) : 0,
+          netMargin: rev > 0 ? +((ni / rev) * 100).toFixed(1) : 0,
+        });
+      }
+    }
+
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=600");
     res.status(200).json({
@@ -106,6 +129,8 @@ export default async function handler(req, res) {
       operatingCF, capitalExpenditure, freeCashFlow, dividendsPaid,
       // Analyst targets
       analystTarget,
+      // Quarterly trends (P2)
+      quarters,
       // Meta
       fiscalDate: inc?.date || "",
       fiscalPeriod: inc?.period || "",
