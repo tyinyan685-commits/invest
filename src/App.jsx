@@ -476,18 +476,26 @@ function runAnalysis(ticker, stockData, dataSource) {
   const posTarget = 1.0;
   const atrPct = (curATR / p.price * 100);
   const overAlloc = atrPct > 4 ? "高ATR，不超配" : atrPct > 2.5 ? "中ATR，标准配" : "低ATR，可超配";
+  // Precise price zones for position entries
+  const curPrice = p.price;
+  const sma50Val = curSMA50 || curPrice;
+  const ema10Val = ema10[ema10.length - 1] || curPrice;
+  const entryZone = { lo: +(curPrice * 0.99).toFixed(2), hi: +(curPrice * 1.01).toFixed(2) };
+  const sma50Zone = { lo: +(sma50Val * 0.98).toFixed(2), hi: +(sma50Val * 1.00).toFixed(2) };
+  const deepZone = { lo: +(sma50Val * 0.85).toFixed(2), hi: +(sma50Val * 0.90).toFixed(2) };
+  const weeklyStop = +(sma50Val * 0.85).toFixed(2);
   const entries = [
-    { label: "首批", size: 0.40, cond: `当前价 ${p.cur}${(p.price * 0.99).toFixed(0)}-${(p.price * 1.01).toFixed(0)}，或回踩 SMA50 ${curSMA50 ? (curSMA50 * 0.98).toFixed(0) + "-" + (curSMA50 * 1.0).toFixed(0) : "待确认"}` },
-    { label: "加码A", size: 0.25, cond: `站稳 EMA10 ${(ema10[ema10.length - 1] || 0).toFixed(1)}，MACD不平 + 放量>${fmt(avgVol)}` },
-    { label: "加码B", size: 0.20, cond: `价值区间 ${curSMA50 ? (curSMA50 * 0.85).toFixed(0) + "-" + (curSMA50 * 0.9).toFixed(0) : "待确认"}，深度回调补仓` },
-    { label: "储备", size: 0.15, cond: "等待下一财报季验证后再决定" },
+    { label: "首批", size: 0.40, priceZone: `${p.cur}${entryZone.lo}-${entryZone.hi}`, cond: `当前价附近 (${p.cur}${entryZone.lo}~${entryZone.hi}) 或回踩 SMA50 (${p.cur}${sma50Zone.lo}~${sma50Zone.hi})`, level: "current" },
+    { label: "加码A", size: 0.25, priceZone: `EMA10 ${p.cur}${ema10Val.toFixed(2)}`, cond: `站稳 EMA10 (${p.cur}${ema10Val.toFixed(2)})，MACD 金叉确认 + 成交量 > ${fmt(avgVol)}`, level: "ema10" },
+    { label: "加码B", size: 0.20, priceZone: `${p.cur}${deepZone.lo}-${deepZone.hi}`, cond: `深度回调至 SMA50×0.85~0.90 (${p.cur}${deepZone.lo}~${deepZone.hi})，强支撑位补仓`, level: "deep" },
+    { label: "储备", size: 0.15, priceZone: "待定", cond: "保留至下一财报季，验证 EPS 增速趋势后再部署", level: "reserve" },
   ];
   const triggers = [
-    { cond: `跌破 SMA50 (${curSMA50?.toFixed(0) || "?"}) 且缩量`, action: "减半仓，暂停加码，观察支撑位" },
-    { cond: `周线收盘跌破 ${curSMA50 ? (curSMA50 * 0.85).toFixed(0) : "?"}`, action: "减仓至≤0.25或清仓" },
-    { cond: "下一财报季增速不及预期", action: "降级至减持，确认增速后恢复" },
-    { cond: p.risks[0]?.d?.slice(0, 30) + "…", action: "降级目标权重，重新评估逻辑" },
-    { cond: `站上 SMA200 (${curSMA200?.toFixed(0) || "?"})`, action: "升级至增持(Overweight)" },
+    { cond: `日线收盘跌破 SMA50 (${p.cur}${sma50Val.toFixed(2)}) 且缩量 < ${fmt(avgVol * 0.7)}`, action: "减半仓至 0.50，暂停所有加码计划", severity: "warn" },
+    { cond: `周线收盘跌破 ${p.cur}${weeklyStop} (SMA50×0.85)`, action: "减仓至 ≤0.25 或清仓止损", severity: "critical" },
+    { cond: `触及情景止损位 ${p.cur}${(sma50Val * 0.85).toFixed(2)}`, action: "执行硬止损，不等反弹", severity: "critical" },
+    { cond: "下一财报 EPS 同比增速 < 10% 或营收 miss", action: "降级至减持(Underweight)，待增速恢复后重新评估", severity: "warn" },
+    { cond: `站上 SMA200 (${curSMA200 ? p.cur + curSMA200.toFixed(2) : "待确认"}) 且 RSI > 55`, action: "升级至增持(Overweight)，首批仓位可加至 0.50", severity: "good" },
   ];
   const radarData = [
     { dim: "估值", val: hasFinData ? (f.fwdPE < 20 ? 85 : f.fwdPE < 30 ? 60 : 35) : 0, na: !hasFinData },
@@ -525,7 +533,6 @@ function runAnalysis(ticker, stockData, dataSource) {
   const bollWidth = bollUpper && bollLower && bollMid ? +((bollUpper - bollLower) / (2 * bollMid) * 100).toFixed(1) : null;
 
   // Scenario analysis (P3-2)
-  const curPrice = p.price;
   const bullTarget = curPrice * (1 + atrMonthlyPct / 100 * 2); // +2 monthly ATR moves
   const baseTarget = curPrice * (1 + atrMonthlyPct / 100 * 0.5); // +0.5 monthly ATR
   const bearTarget = curPrice * (1 - atrMonthlyPct / 100 * 2); // -2 monthly ATR
@@ -684,7 +691,7 @@ export default function StockAnalysisTool() {
     setResult(analysis);
 
     // 4. Fetch external data (sentiment, macro, news, financials, history) in parallel
-    status.push({ name: "FMP 行情", ok: dataSource === "live", note: dataSource === "live" ? "实时价格/52周/市值" : "预设数据" });
+    status.push({ name: "FMP 行情", ok: dataSource === "live", level: dataSource === "live" ? "complete" : "degraded", note: dataSource === "live" ? "实时价格/52周/市值" : "预设数据(可能过时)" });
 
     const [sent, mac, nws, fin, hist, evts] = await Promise.all([
       fetchSentiment(t),
@@ -705,41 +712,41 @@ export default function StockAnalysisTool() {
         analysis = { ...analysis, ytd: realYTD };
       }
       analysis = { ...analysis, historySource: "live" };
-      status.push({ name: "历史K线", ok: true, note: `${hist.count}天真实OHLCV (${hist.bars[0]?.date}~${hist.bars[hist.bars.length - 1]?.date})` });
-      status.push({ name: "技术指标", ok: true, note: "真实K线计算 (SMA/EMA/RSI/MACD/ATR)" });
+      status.push({ name: "历史K线", ok: true, level: hist.count >= 200 ? "complete" : hist.count >= 50 ? "degraded" : "degraded", note: `${hist.count}天真实OHLCV (${hist.bars[0]?.date}~${hist.bars[hist.bars.length - 1]?.date})${hist.count < 200 ? " (<200天, 部分长期指标精度降低)" : ""}` });
+      status.push({ name: "技术指标", ok: true, level: hist.count >= 100 ? "complete" : "degraded", note: `真实K线计算 (SMA/EMA/RSI/MACD/ATR)${hist.count < 100 ? " (<100天, SMA200不可用)" : ""}` });
     } else {
       // No real history — analysis uses genPrices (simulated), mark clearly
       analysis = { ...analysis, historySource: "simulated" };
-      status.push({ name: "历史K线", ok: false, note: hist.error ? hist.error : "该股票历史数据不可用" });
-      status.push({ name: "技术指标", ok: false, note: "⚠ 基于模拟K线，仅供趋势参考" });
+      status.push({ name: "历史K线", ok: false, level: "missing", note: hist.error ? hist.error : "该股票历史数据不可用" });
+      status.push({ name: "技术指标", ok: false, level: "missing", note: "⚠ 基于模拟K线，仅供趋势参考" });
     }
     setResult(analysis);
 
     setSentiment(sent);
-    status.push({ name: "社交情绪", ok: sent.ok, note: sent.ok ? `StockTwits ${sent.count}帖, Bullish ${sent.bullPct}%` : sent.error });
+    status.push({ name: "社交情绪", ok: sent.ok, level: sent.ok ? (sent.count > 25 ? "complete" : sent.count > 10 ? "degraded" : "degraded") : "missing", note: sent.ok ? `StockTwits ${sent.count}帖, Bullish ${sent.bullPct}%${sent.count <= 10 ? " (样本偏少)" : ""}` : sent.error });
 
     setMacro(mac);
-    status.push({ name: "宏观数据", ok: mac.ok, note: mac.ok ? `10Y ${mac.yield10y}, FedFunds ${mac.fedFunds}` : mac.error });
+    status.push({ name: "宏观数据", ok: mac.ok, level: mac.ok ? "complete" : "missing", note: mac.ok ? `10Y ${mac.yield10y}, FedFunds ${mac.fedFunds}` : mac.error });
 
     setEvents(evts);
     if (evts.ok) {
       const evtCount = evts.macroEvents?.length || 0;
-      status.push({ name: "事件日历", ok: true, note: `${evtCount}个宏观事件${evts.earnings?.date ? `, 财报预计 ${evts.earnings.date}` : ""}` });
+      status.push({ name: "事件日历", ok: true, level: (evts.earnings?.date && (evts.macroEvents?.length || 0) > 0) ? "complete" : "degraded", note: `${evtCount}个宏观事件${evts.earnings?.date ? `, 财报预计 ${evts.earnings.date}` : " (财报日期待确认)"}` });
     } else {
-      status.push({ name: "事件日历", ok: false, note: evts.error || "事件数据不可用" });
+      status.push({ name: "事件日历", ok: false, level: "missing", note: evts.error || "事件数据不可用" });
     }
 
     // 4b. Try to fetch real options IV from Futu OpenD bridge (optional, local only)
     const iv = await fetchIV(t, analysis.price);
     setIvData(iv.ok ? iv : null);
     if (iv.ok) {
-      status.push({ name: "期权IV", ok: true, note: `IV ${iv.avg_iv}%, HV ${iv.avg_hv}%, 溢价 ${iv.vol_premium}% (${iv.contracts_scanned}合约)` });
+      status.push({ name: "期权IV", ok: true, level: "complete", note: `IV ${iv.avg_iv}%, HV ${iv.avg_hv}%, 溢价 ${iv.vol_premium}% (${iv.contracts_scanned}合约)` });
     } else {
-      status.push({ name: "期权IV", ok: false, note: "Futu桥接未连接 (使用HV替代)" });
+      status.push({ name: "期权IV", ok: false, level: "degraded", note: "Futu桥接未连接 (使用HV历史波动率替代)" });
     }
 
     setNews(nws);
-    status.push({ name: "新闻", ok: nws.ok, note: nws.ok ? `${nws.total}条相关新闻` : nws.error });
+    status.push({ name: "新闻", ok: nws.ok, level: nws.ok ? (nws.total > 5 ? "complete" : "degraded") : "missing", note: nws.ok ? `${nws.total}条相关新闻` : nws.error });
 
     // 5. Merge real financials into analysis if available
     if (fin.ok && fin.eps > 0 && analysis.price > 0) {
@@ -799,17 +806,17 @@ export default function StockAnalysisTool() {
 
       analysis = { ...analysis, fin: updatedFin, finSource: "live", fundScore: liveFundScore };
       setResult(analysis);
-      status.push({ name: "财务报表", ok: true, note: `PE ${realPE}x, 营收 ${fmt(fin.revenue)}, EPS $${fin.eps.toFixed(2)}${fin.operatingCF ? ", OCF " + fmt(fin.operatingCF) : ""}${fin.cash ? ", 现金 " + fmt(fin.cash) : ""}` });
+      status.push({ name: "财务报表", ok: true, level: fin.quarters?.length >= 4 ? "complete" : fin.eps > 0 ? "degraded" : "degraded", note: `PE ${realPE}x, 营收 ${fmt(fin.revenue)}, EPS $${fin.eps.toFixed(2)}${fin.operatingCF ? ", OCF " + fmt(fin.operatingCF) : ""}${fin.cash ? ", 现金 " + fmt(fin.cash) : ""}${fin.quarters?.length < 4 ? " (季报数据不完整)" : ""}` });
       if (fin.analystTarget?.avgTarget) {
-        status.push({ name: "分析师预测", ok: true, note: `${fin.analystTarget.count}位分析师, 均价 $${fin.analystTarget.avgTarget.toFixed(1)}` });
+        status.push({ name: "分析师预测", ok: true, level: fin.analystTarget.count >= 5 ? "complete" : "degraded", note: `${fin.analystTarget.count}位分析师, 均价 $${fin.analystTarget.avgTarget.toFixed(1)}${fin.analystTarget.count < 5 ? " (覆盖较少)" : ""}` });
       } else {
-        status.push({ name: "分析师预测", ok: false, note: "分析师目标价不可用" });
+        status.push({ name: "分析师预测", ok: false, level: "missing", note: "分析师目标价不可用" });
       }
     } else {
       setFinData(null);
       const hasPreset = !!PRESETS[t];
-      status.push({ name: "财务报表", ok: hasPreset, note: hasPreset ? "预设数据" : (fin.error ? fin.error : `${t} 财务报表需 FMP 付费套餐`) });
-      status.push({ name: "分析师预测", ok: false, note: "需FMP付费套餐" });
+      status.push({ name: "财务报表", ok: hasPreset, level: hasPreset ? "degraded" : "missing", note: hasPreset ? "预设数据(非实时)" : (fin.error ? fin.error : `${t} 财务报表需 FMP 付费套餐`) });
+      status.push({ name: "分析师预测", ok: false, level: "missing", note: "需FMP付费套餐" });
     }
 
     setDataStatus(status);
@@ -941,6 +948,13 @@ export default function StockAnalysisTool() {
                   <span style={{ fontSize: 22, fontWeight: 800 }}>{result.ticker}</span>
                   <Badge text={result.market === "US" ? "美股" : "港股"} color={T.blue} />
                   <Badge text={result.cat} color={T.purple} />
+                  {dataStatus.length > 0 && (() => {
+                    const dc = dataStatus.filter(s => s.level === "complete").length;
+                    const dt = dataStatus.length;
+                    const dqLabel = dc >= dt * 0.8 ? "数据完整" : dc >= dt * 0.5 ? "数据良好" : "数据有限";
+                    const dqColor = dc >= dt * 0.8 ? T.green : dc >= dt * 0.5 ? T.yellow : T.dim;
+                    return <Badge text={`${dqLabel} ${dc}/${dt}`} color={dqColor} />;
+                  })()}
                 </div>
                 <div style={{ fontSize: 15, color: T.muted, marginBottom: 8 }}>{result.name}</div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
@@ -1453,7 +1467,7 @@ export default function StockAnalysisTool() {
                     ))}
                   </div>
                   <div style={{ marginTop: 10, fontSize: 11, color: T.dim }}>
-                    经典 Pivot 计算: P = (H+L+C)/3 · 证据强度: <Badge text="中" color={T.yellow} /> (基于日线级别)
+                    经典 Pivot 计算: P = (H+L+C)/3 · 证据强度: <Badge text={result.tech.isRealHistory ? "高" : "低"} color={result.tech.isRealHistory ? T.green : T.dim} /> ({result.tech.isRealHistory ? `基于${result.tech.historyLen}天真实日线` : "基于模拟数据"})
                   </div>
                 </Card>
               )}
@@ -1467,15 +1481,21 @@ export default function StockAnalysisTool() {
                 <SectionTitle icon="&#x1F3AF;">仓位计划 (总目标 = 1.0 单位, 中等仓)</SectionTitle>
                 <div style={{ fontSize: 12, color: T.muted, marginBottom: 14 }}>ATR {result.tech.atrPct.toFixed(1)}% → {result.pos.overAlloc}</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {result.pos.entries.map((e, i) => (
-                    <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", background: T.cardAlt, padding: "12px 14px", borderRadius: 8 }}>
-                      <div style={{ minWidth: 60 }}>
-                        <div style={{ fontSize: 14, fontWeight: 800, color: [T.blue, T.green, T.yellow, T.muted][i] }}>{e.label}</div>
+                  {result.pos.entries.map((e, i) => {
+                    const entryColors = [T.blue, T.green, T.yellow, T.muted];
+                    return (
+                    <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", background: T.cardAlt, padding: "12px 14px", borderRadius: 8, borderLeft: `3px solid ${entryColors[i]}` }}>
+                      <div style={{ minWidth: 64 }}>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: entryColors[i] }}>{e.label}</div>
                         <div style={{ fontSize: 20, fontWeight: 800, color: T.text }}>{e.size.toFixed(2)}</div>
                       </div>
-                      <div style={{ fontSize: 13, color: T.muted, lineHeight: 1.6 }}>{e.cond}</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: T.text, marginBottom: 4 }}>{e.priceZone}</div>
+                        <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.5 }}>{e.cond}</div>
+                      </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 <div style={{ marginTop: 16 }}>
                   <div style={{ fontSize: 11, color: T.muted, marginBottom: 6 }}>仓位分配</div>
@@ -1491,15 +1511,19 @@ export default function StockAnalysisTool() {
               <Card>
                 <SectionTitle icon="&#x26A0;&#xFE0F;">风控触发条件 (触发 → 动作)</SectionTitle>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {result.pos.triggers.map((t, i) => (
-                    <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "10px 12px", background: T.cardAlt, borderRadius: 8, borderLeft: `3px solid ${i < 2 ? T.red : i === 4 ? T.green : T.yellow}` }}>
-                      <span style={{ fontSize: 14, fontWeight: 800, color: i < 2 ? T.red : i === 4 ? T.green : T.yellow, minWidth: 20 }}>{i + 1}.</span>
+                  {result.pos.triggers.map((t, i) => {
+                    const sevColor = t.severity === "critical" ? T.red : t.severity === "good" ? T.green : T.yellow;
+                    const sevIcon = t.severity === "critical" ? "⛔" : t.severity === "good" ? "✅" : "⚠️";
+                    return (
+                    <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "10px 12px", background: T.cardAlt, borderRadius: 8, borderLeft: `3px solid ${sevColor}` }}>
+                      <span style={{ fontSize: 14, minWidth: 20 }}>{sevIcon}</span>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: T.text, marginBottom: 2 }}>{t.cond}</div>
-                        <div style={{ fontSize: 12, color: T.muted }}>→ {t.action}</div>
+                        <div style={{ fontSize: 12, color: sevColor }}>→ {t.action}</div>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </Card>
 
@@ -1752,7 +1776,7 @@ export default function StockAnalysisTool() {
                   ) : (
                     <div style={{ padding: 16, textAlign: "center", color: T.dim, fontSize: 12 }}>加载中...</div>
                   )}
-                  <div style={{ marginTop: 10, fontSize: 10, color: T.dim }}>来源: {sentiment?.source || "StockTwits 公开API"} · 证据强度: <Badge text={sentiment?.strength || "低"} color={sentiment?.strength === "中" ? T.yellow : T.dim} /></div>
+                  <div style={{ marginTop: 10, fontSize: 10, color: T.dim }}>来源: {sentiment?.source || "StockTwits 公开API"} · 证据强度: <Badge text={sentiment?.strength || "低"} color={sentiment?.strength === "高" ? T.green : sentiment?.strength === "中" ? T.yellow : T.dim} /></div>
                 </Card>
 
                 {/* Recent StockTwits Posts */}
@@ -1786,7 +1810,10 @@ export default function StockAnalysisTool() {
                         <span style={{ fontSize: 14, fontWeight: 700, color: T.text }}>{r.t}</span>
                         <div style={{ display: "flex", gap: 6 }}>
                           <RiskBadge level={r.l} />
-                          <Badge text="证据: 中" color={T.yellow} />
+                          {(() => {
+                            const riskEv = result.dataSource === "live" && result.finSource === "live" ? "高" : result.dataSource === "live" || result.finSource === "live" ? "中" : "低";
+                            return <Badge text={`证据: ${riskEv}`} color={riskEv === "高" ? T.green : riskEv === "中" ? T.yellow : T.dim} />;
+                          })()}
                         </div>
                       </div>
                       <div style={{ fontSize: 13, color: T.muted, lineHeight: 1.6 }}>{r.d}</div>
@@ -1892,17 +1919,21 @@ export default function StockAnalysisTool() {
                       <span style={{ color: T.yellow, fontWeight: 700, fontSize: 13 }}>中性派 (框架合理, 触发待验证)</span>
                     </div>
                     {[
-                      { t: "数据完整度", d: `实时行情: ${result.dataSource === "live" ? "✓" : "✗"}, 实时财务: ${result.finSource === "live" ? "✓" : "✗"}, 真实K线: ${result.tech.isRealHistory ? `${result.tech.historyLen}天` : "✗"}, 情绪: ${sentiment?.ok ? "✓" : "✗"}`, ev: "事实" },
+                      (() => {
+                        const srcCount = [result.dataSource === "live", result.finSource === "live", result.tech.isRealHistory, sentiment?.ok, macro?.ok, events?.ok].filter(Boolean).length;
+                        const compEv = srcCount >= 5 ? "高" : srcCount >= 3 ? "中" : "低";
+                        return { t: "数据完整度", d: `实时行情: ${result.dataSource === "live" ? "✓" : "✗"}, 实时财务: ${result.finSource === "live" ? "✓" : "✗"}, 真实K线: ${result.tech.isRealHistory ? `${result.tech.historyLen}天` : "✗"}, 情绪: ${sentiment?.ok ? "✓" : "✗"}, 宏观: ${macro?.ok ? "✓" : "✗"}, 事件: ${events?.ok ? "✓" : "✗"}`, ev: compEv };
+                      })(),
                       { t: "技术面分歧", d: result.tech.signals.length >= 4
                         ? `${result.tech.signals.filter(s => s.color === T.green).length}多/${result.tech.signals.filter(s => s.color === T.red).length}空/${result.tech.signals.filter(s => s.color === T.yellow).length}中性 — 信号未完全一致, 需更多确认`
                         : "技术指标不足, 无法形成一致判断",
-                        ev: result.tech.isRealHistory ? "中" : "低" },
-                      { t: "仓位建议", d: `当前 ATR ${result.tech.atrPct.toFixed(1)}%, ${result.tech.atrPct > 3 ? "波动较大, 宜轻仓试探" : result.tech.atrPct > 1.5 ? "波动适中, 可标准配置" : "波动较低, 可适当加仓"}. 首批不超40%`, ev: "中-高" },
+                        ev: result.tech.isRealHistory && result.tech.historyLen > 100 ? "中-高" : result.tech.isRealHistory ? "中" : "低" },
+                      { t: "仓位建议", d: `当前 ATR ${result.tech.atrPct.toFixed(1)}%, ${result.tech.atrPct > 3 ? "波动较大, 宜轻仓试探" : result.tech.atrPct > 1.5 ? "波动适中, 可标准配置" : "波动较低, 可适当加仓"}. 首批不超40%`, ev: result.dataSource === "live" && result.tech.isRealHistory ? "高" : result.dataSource === "live" || result.tech.isRealHistory ? "中" : "低" },
                     ].map((n, i) => (
                       <div key={i} style={{ padding: "8px 10px", background: T.yellow + "08", borderRadius: 6, marginBottom: 5, borderLeft: `2px solid ${T.yellow}` }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                           <span style={{ fontWeight: 700, color: T.text, fontSize: 12 }}>{n.t}</span>
-                          <Badge text={`证据: ${n.ev}`} color={n.ev === "高" ? T.green : n.ev === "事实" ? T.blue : n.ev === "中" ? T.yellow : T.dim} />
+                          <Badge text={`证据: ${n.ev}`} color={n.ev === "高" ? T.green : n.ev.includes("高") ? T.cyan : n.ev === "中" ? T.yellow : n.ev === "事实" ? T.blue : T.dim} />
                         </div>
                         <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.6 }}>{n.d}</div>
                       </div>
@@ -1931,7 +1962,7 @@ export default function StockAnalysisTool() {
                         <Badge text={result.tech.priceVs52h > -10 ? "低" : "中"} color={result.tech.priceVs52h > -10 ? T.green : T.yellow} />
                       </div>
                       <div style={{ fontSize: 11, color: T.muted, lineHeight: 1.6 }}>
-                        距高点 {pct(result.tech.priceVs52h)}, ${result.tech.isRealHistory ? "真实K线确认" : "模拟数据, 需验证"}
+                        距高点 {pct(result.tech.priceVs52h)}, {result.tech.isRealHistory ? "真实K线确认" : "模拟数据, 需验证"}
                         {result.tech.boll?.upper && result.price > result.tech.boll.upper * 0.95 ? ", 接近布林上轨, 短期承压" : ""}
                       </div>
                     </div>
@@ -2017,11 +2048,26 @@ export default function StockAnalysisTool() {
               <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 10, marginTop: 10 }}>
                 <div style={{ fontSize: 11, color: T.dim, lineHeight: 1.8 }}>
                   <span style={{ color: T.yellow }}>数据来源透明度:</span>
-                  {dataStatus.length > 0 && dataStatus.map((s, i) => (
-                    <span key={i} style={{ marginLeft: 6 }}>
-                      <span style={{ color: s.ok ? T.green : T.dim }}>{s.ok ? "\u2713" : "\u25CB"}</span> {s.name}
-                    </span>
-                  ))}
+                  {(() => {
+                    const complete = dataStatus.filter(s => s.level === "complete").length;
+                    const degraded = dataStatus.filter(s => s.level === "degraded").length;
+                    const missing = dataStatus.filter(s => s.level === "missing").length;
+                    const total = dataStatus.length;
+                    const qualityLabel = complete >= total * 0.8 ? "优秀" : complete >= total * 0.5 ? "良好" : complete + degraded >= total * 0.5 ? "一般" : "不足";
+                    const qualityColor = complete >= total * 0.8 ? T.green : complete >= total * 0.5 ? T.cyan : T.yellow;
+                    return <span style={{ marginLeft: 6, color: qualityColor, fontWeight: 700 }}>数据质量: {qualityLabel} ({complete}完整/{degraded}降级/{missing}缺失)</span>;
+                  })()}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+                  {dataStatus.length > 0 && dataStatus.map((s, i) => {
+                    const lvColor = s.level === "complete" ? T.green : s.level === "degraded" ? T.yellow : T.dim;
+                    const lvIcon = s.level === "complete" ? "✓" : s.level === "degraded" ? "◐" : "○";
+                    return (
+                      <span key={i} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: lvColor + "15", color: lvColor, border: `1px solid ${lvColor}30` }} title={s.note}>
+                        {lvIcon} {s.name}
+                      </span>
+                    );
+                  })}
                 </div>
                 <div style={{ fontSize: 11, color: T.dim, marginTop: 6 }}>
                   <span style={{ color: T.yellow }}>&#x26A0;</span> 技术指标基于{result.tech.isRealHistory ? `${result.tech.historyLen}天真实日线` : "模拟K线（该股票历史数据不可用）"}计算。本报告自动生成，仅供参考，不构成投资建议。

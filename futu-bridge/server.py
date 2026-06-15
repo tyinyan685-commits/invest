@@ -261,4 +261,4 @@ if __name__ == "__main__":
     print(f"  GET /api/option-volatility?symbol=MU&price=103 - Option IV data")
     print(f"===============================")
 
-    app.run(host="0.0.0.0", port=args.port, debug=False)
+    app.run(host="127.0.0.1", port=args.port, debug=False)

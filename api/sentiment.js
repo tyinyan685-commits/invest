@@ -31,7 +31,7 @@ export default async function handler(req, res) {
       bearPct: Math.round(bearish / total * 100),
       direction: Math.round(bullish / total * 100) > 60 ? "\u504F\u591A" : Math.round(bearish / total * 100) > 60 ? "\u504F\u7A7A" : "\u4E2D\u6027",
       crowdedness: msgs.length > 25 ? "\u9AD8" : msgs.length > 15 ? "\u4E2D" : "\u4F4E",
-      strength: msgs.length > 20 ? "\u4E2D" : "\u4F4E",
+      strength: msgs.length > 30 && (sym.watchlist_count || 0) > 1000 ? "\u9AD8" : msgs.length > 20 ? "\u4E2D" : msgs.length > 10 ? "\u4F4E-\u4E2D" : "\u4F4E",
       recentPosts, source: "StockTwits \u516C\u5F00API"
     });
   } catch (e) {
