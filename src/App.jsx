@@ -151,6 +151,14 @@ const fetchFinancials = async (symbol) => {
   } catch (e) { return { ok: false, error: e.message, source: "FMP financials (失败)" }; }
 };
 
+const fetchProfile = async (symbol) => {
+  try {
+    const r = await fetch(`/api/profile?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(15000) });
+    const d = await r.json();
+    return d; // { ok: true, profile: {...}, source } or { ok: false, error }
+  } catch (e) { return { ok: false, error: e.message }; }
+};
+
 // ═══════════════════ FMP PROFILE → ANALYSIS FORMAT ═══════════════════
 const mergeLiveWithPreset = (ticker, prof) => {
   const p = prof;
@@ -491,16 +499,31 @@ export default function StockAnalysisTool() {
     let stockData = null, dataSource = "demo";
     const status = [];
 
-    // 1. Try FMP profile API for live price data
-    if (apiKey) {
+    // 1. Try FMP profile API for live price data (via proxy, then direct fallback)
+    {
+      let profileResult = null;
       try {
-        const apiResult = await fmpFetchProfile(t, apiKey);
-        if (apiResult?.profile) {
-          stockData = mergeLiveWithPreset(t, apiResult.profile);
-          dataSource = "live";
+        const proxyRes = await fetchProfile(t);
+        if (proxyRes?.ok && proxyRes.profile) {
+          profileResult = { profile: proxyRes.profile, source: proxyRes.source };
         }
       } catch (e) {
-        console.warn("FMP API failed:", e.message);
+        console.warn("Profile proxy failed:", e.message);
+      }
+      // Direct browser fallback if proxy didn't work
+      if (!profileResult && apiKey) {
+        try {
+          const directRes = await fmpFetchProfile(t, apiKey);
+          if (directRes?.profile) {
+            profileResult = directRes;
+          }
+        } catch (e) {
+          console.warn("Direct FMP API failed:", e.message);
+        }
+      }
+      if (profileResult?.profile) {
+        stockData = mergeLiveWithPreset(t, profileResult.profile);
+        dataSource = "live";
       }
     }
 
