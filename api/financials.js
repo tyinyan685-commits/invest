@@ -1,20 +1,20 @@
+import { FMP_KEY, FMP_BASE, fetchJSONArray, setCORS, validateSymbol } from "./_lib.js";
+
 export default async function handler(req, res) {
   const { symbol } = req.query;
-  if (!symbol) return res.status(400).json({ ok: false, error: "Missing symbol" });
-  const KEY = "7TTaEnINif0Z5FJZgM6xvJibocPeHFPn";
-  const BASE = "https://financialmodelingprep.com/stable";
+  const err = validateSymbol(symbol);
+  if (err) return res.status(400).json({ ok: false, error: err });
   const opt = { signal: AbortSignal.timeout(12000) };
-  const fetchJSON = (url) => fetch(url, opt).then(r => r.json()).catch(() => []);
   try {
     // Fetch 7 endpoints in parallel (income quarterly for QoQ trends, annual for growth rates)
     const [incRes, incAnnual, kmRes, fgRes, bsRes, cfRes, ptRes] = await Promise.all([
-      fetchJSON(`${BASE}/income-statement?symbol=${symbol}&apikey=${KEY}&limit=5&period=quarter`),
-      fetchJSON(`${BASE}/income-statement?symbol=${symbol}&apikey=${KEY}&limit=2`),
-      fetchJSON(`${BASE}/key-metrics?symbol=${symbol}&apikey=${KEY}&limit=1`),
-      fetchJSON(`${BASE}/financial-growth?symbol=${symbol}&apikey=${KEY}&limit=1`),
-      fetchJSON(`${BASE}/balance-sheet-statement?symbol=${symbol}&apikey=${KEY}&limit=1`),
-      fetchJSON(`${BASE}/cash-flow-statement?symbol=${symbol}&apikey=${KEY}&limit=1`),
-      fetchJSON(`${BASE}/price-target-summary?symbol=${symbol}&apikey=${KEY}`),
+      fetchJSONArray(`${FMP_BASE}/income-statement?symbol=${symbol}&apikey=${FMP_KEY}&limit=5&period=quarter`),
+      fetchJSONArray(`${FMP_BASE}/income-statement?symbol=${symbol}&apikey=${FMP_KEY}&limit=2`),
+      fetchJSONArray(`${FMP_BASE}/key-metrics?symbol=${symbol}&apikey=${FMP_KEY}&limit=1`),
+      fetchJSONArray(`${FMP_BASE}/financial-growth?symbol=${symbol}&apikey=${FMP_KEY}&limit=1`),
+      fetchJSONArray(`${FMP_BASE}/balance-sheet-statement?symbol=${symbol}&apikey=${FMP_KEY}&limit=1`),
+      fetchJSONArray(`${FMP_BASE}/cash-flow-statement?symbol=${symbol}&apikey=${FMP_KEY}&limit=1`),
+      fetchJSONArray(`${FMP_BASE}/price-target-summary?symbol=${symbol}&apikey=${FMP_KEY}`),
     ]);
 
     // Annual data for headline metrics (PE, revenue, growth rates)
@@ -107,8 +107,7 @@ export default async function handler(req, res) {
       }
     }
 
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=600");
+    setCORS(res);
     res.status(200).json({
       ok: true,
       // Income
@@ -141,7 +140,7 @@ export default async function handler(req, res) {
       source: "FMP income+metrics+growth+balance+cashflow+targets"
     });
   } catch (e) {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    setCORS(res);
     res.status(200).json({ ok: false, error: e.message, source: "FMP financials (failed)" });
   }
 }

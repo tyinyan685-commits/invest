@@ -1,6 +1,9 @@
+import { setCORS, validateSymbol } from "./_lib.js";
+
 export default async function handler(req, res) {
   const { symbol } = req.query;
-  if (!symbol) return res.status(400).json({ ok: false, error: "Missing symbol param" });
+  const err = validateSymbol(symbol);
+  if (err) return res.status(400).json({ ok: false, error: err });
   try {
     const r = await fetch(
       `https://api.stocktwits.com/api/2/streams/symbol/${encodeURIComponent(symbol)}.json`,
@@ -23,7 +26,7 @@ export default async function handler(req, res) {
       });
     }
     const total = msgs.length || 1;
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    setCORS(res);
     res.status(200).json({
       ok: true, count: msgs.length, watchlist: sym.watchlist_count || 0,
       bullish, bearish, neutral: total - bullish - bearish,
@@ -35,7 +38,7 @@ export default async function handler(req, res) {
       recentPosts, source: "StockTwits \u516C\u5F00API"
     });
   } catch (e) {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    setCORS(res);
     res.status(200).json({ ok: false, error: e.message, count: 0, bullish: 0, bearish: 0, bullPct: 0, bearPct: 0, watchlist: 0, recentPosts: [], source: "StockTwits (\u5931\u8D25)" });
   }
 }

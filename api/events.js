@@ -1,12 +1,9 @@
+import { FMP_KEY, FMP_BASE, FRED_KEY, FRED_BASE, fetchJSON, setCORS, validateSymbol } from "./_lib.js";
+
 export default async function handler(req, res) {
   const { symbol } = req.query;
-  if (!symbol) return res.status(400).json({ ok: false, error: "Missing symbol" });
-  const FMP_KEY = "7TTaEnINif0Z5FJZgM6xvJibocPeHFPn";
-  const FRED_KEY = "07a98309feadf15506ac4004b1d66492";
-  const FMP = "https://financialmodelingprep.com/stable";
-  const FRED = "https://api.stlouisfed.org/fred";
-  const opt = { signal: AbortSignal.timeout(12000) };
-  const fetchJSON = (url) => fetch(url, opt).then(r => r.json()).catch(() => null);
+  const err = validateSymbol(symbol);
+  if (err) return res.status(400).json({ ok: false, error: err });
 
   try {
     const today = new Date();
@@ -66,12 +63,12 @@ export default async function handler(req, res) {
 
     // Parallel: quarterly income (for earnings fallback) + key economic series
     const [qIncRes, cpiRes, ppiRes, unrateRes, payRes, fomcRes] = await Promise.all([
-      fetchJSON(`${FMP}/income-statement?symbol=${symbol}&apikey=${FMP_KEY}&limit=4&period=quarter`),
-      fetchJSON(`${FRED}/series/observations?series_id=CPIAUCSL&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`),
-      fetchJSON(`${FRED}/series/observations?series_id=PPIACO&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`),
-      fetchJSON(`${FRED}/series/observations?series_id=UNRATE&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
-      fetchJSON(`${FRED}/series/observations?series_id=PAYEMS&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
-      fetchJSON(`${FRED}/series/observations?series_id=FEDFUNDS&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
+      fetchJSON(`${FMP_BASE}/income-statement?symbol=${symbol}&apikey=${FMP_KEY}&limit=4&period=quarter`),
+      fetchJSON(`${FRED_BASE}/series/observations?series_id=CPIAUCSL&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`),
+      fetchJSON(`${FRED_BASE}/series/observations?series_id=PPIACO&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`),
+      fetchJSON(`${FRED_BASE}/series/observations?series_id=UNRATE&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
+      fetchJSON(`${FRED_BASE}/series/observations?series_id=PAYEMS&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
+      fetchJSON(`${FRED_BASE}/series/observations?series_id=FEDFUNDS&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
     ]);
 
     // Fallback: estimate earnings from quarterly income pattern if Nasdaq didn't find it
@@ -171,8 +168,7 @@ export default async function handler(req, res) {
     if (pay) indicators.nonfarm = { value: pay.value, change: pay.change, date: pay.date, label: "\u975E\u519C\u5C31\u4E1A", unit: "\u5343\u4EBA", desc: pay.change > 100 ? "\u5C31\u4E1A\u5F3A\u52B2" : pay.change > 0 ? "\u5C31\u4E1A\u7A33\u5B9A" : "\u5C31\u4E1A\u8D70\u5F31" };
     if (ff) indicators.fedFunds = { value: ff.value, date: ff.date, label: "Fed Funds", unit: "%", desc: "" };
 
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=600");
+    setCORS(res);
     res.status(200).json({
       ok: true,
       earnings,
@@ -181,7 +177,7 @@ export default async function handler(req, res) {
       generatedAt: fmtDate(today),
     });
   } catch (e) {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    setCORS(res);
     res.status(200).json({ ok: false, error: e.message });
   }
 }

@@ -69,9 +69,30 @@ const fmt = (n) => {
   if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1) + "K";
   return n.toFixed(0);
 };
-const pct = (n) => (n >= 0 ? "+" : "") + n.toFixed(1) + "%";
+const pct = (n) => { if (n == null || isNaN(n)) return "N/A"; return (n >= 0 ? "+" : "") + n.toFixed(1) + "%"; };
 const safeNum = (v, fallback = 0) => (v != null && !isNaN(v) && isFinite(v)) ? v : fallback;
 const naOr = (v, fmtFn) => (v != null && v !== 0) ? fmtFn(v) : "N/A";
+
+// ═══════════════════ SCORING HELPERS ═══════════════════
+const calcFundScore = (fin) => {
+  if (!fin || fin.fwdPE == null) return null;
+  let s = 50;
+  if (fin.fwdPE < 20) s += 15; else if (fin.fwdPE < 30) s += 5; else s -= 10;
+  if (fin.revG > 30) s += 15; else if (fin.revG > 10) s += 8; else s -= 5;
+  if (fin.niG > 30) s += 10; else if (fin.niG > 0) s += 5; else s -= 10;
+  if (fin.roe > 25) s += 10; else if (fin.roe > 15) s += 5;
+  if (fin.gm > 50) s += 5;
+  return Math.min(100, Math.max(0, s));
+};
+const calcCompositeScore = (fundScore, techScore, sentBuzz = 50) => {
+  let s = 50;
+  if (fundScore != null) s += (fundScore - 50) * 0.45;
+  s += (techScore - 50) * 0.40;
+  s += (sentBuzz - 50) * 0.15;
+  return Math.round(Math.min(100, Math.max(0, s)));
+};
+const scoreToRating = (sc) => sc >= 70 ? "买入" : sc >= 55 ? "持有" : sc >= 40 ? "观望" : "回避";
+const scoreToSub = (sc) => sc >= 70 ? "Accumulate" : sc >= 55 ? "Hold" : sc >= 40 ? "Neutral" : "Avoid";
 
 // ═══════════════════ PRICE GENERATOR (DEMO) ═══════════════════
 const genPrices = (cur, days, vol) => {
@@ -90,80 +111,53 @@ const genPrices = (cur, days, vol) => {
   return data;
 };
 
-// ═══════════════════ FMP API SERVICE ═══════════════════
-const FMP_STABLE = "https://financialmodelingprep.com/stable";
-const DEFAULT_KEY = "7TTaEnINif0Z5FJZgM6xvJibocPeHFPn";
-
-const fmpGet = async (endpoint, params, apiKey) => {
-  const qs = new URLSearchParams({ ...params, apikey: apiKey }).toString();
-  const url = `${FMP_STABLE}/${endpoint}?${qs}`;
-  const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
-  if (!r.ok) throw new Error(`FMP ${r.status}`);
-  const data = await r.json();
-  if (data?.["Error Message"] || data?.["Premium Query Parameter"]) throw new Error("Premium/legacy");
-  return data;
-};
-
-const fmpFetchProfile = async (symbol, apiKey) => {
-  // Try profile first (most data), fallback to quote
-  try {
-    const data = await fmpGet("profile", { symbol }, apiKey);
-    if (Array.isArray(data) && data[0]) return { profile: data[0], source: "profile" };
-  } catch (e) { /* try quote */ }
-  try {
-    const data = await fmpGet("quote", { symbol }, apiKey);
-    if (Array.isArray(data) && data[0]) return { profile: data[0], source: "quote" };
-  } catch (e) { /* fail */ }
-  return null;
-};
-
 // ═══════════════════ EXTERNAL API SERVICES (via Vercel proxy) ═══════════════════
-// Direct browser calls blocked by CORS → proxy through /api serverless functions
+// All external API calls go through serverless proxy to avoid CORS and protect API keys
+
+const safeJson = async (r) => {
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+};
 
 const fetchSentiment = async (symbol) => {
   try {
     const r = await fetch(`/api/sentiment?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(12000) });
-    const d = await r.json();
-    return d;
+    return await safeJson(r);
   } catch (e) { return { ok: false, error: e.message, count: 0, bullish: 0, bearish: 0, bullPct: 0, bearPct: 0, watchlist: 0, recentPosts: [], source: "StockTwits (失败)" }; }
 };
 
 const fetchMacro = async () => {
   try {
     const r = await fetch(`/api/macro`, { signal: AbortSignal.timeout(12000) });
-    const d = await r.json();
-    return d;
+    return await safeJson(r);
   } catch (e) { return { ok: false, yield10y: "N/A", fedFunds: "N/A", error: e.message, source: "FRED (失败)" }; }
 };
 
 const fetchNews = async (query) => {
   try {
     const r = await fetch(`/api/news?q=${encodeURIComponent(query)}`, { signal: AbortSignal.timeout(12000) });
-    const d = await r.json();
-    return d;
+    return await safeJson(r);
   } catch (e) { return { ok: false, total: 0, articles: [], error: e.message, source: "NewsAPI (失败)" }; }
 };
 
 const fetchFinancials = async (symbol) => {
   try {
     const r = await fetch(`/api/financials?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(12000) });
-    const d = await r.json();
-    return d;
+    return await safeJson(r);
   } catch (e) { return { ok: false, error: e.message, source: "FMP financials (失败)" }; }
 };
 
 const fetchProfile = async (symbol) => {
   try {
     const r = await fetch(`/api/profile?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(15000) });
-    const d = await r.json();
-    return d; // { ok: true, profile: {...}, source } or { ok: false, error }
+    return await safeJson(r);
   } catch (e) { return { ok: false, error: e.message }; }
 };
 
 const fetchHistory = async (symbol) => {
   try {
     const r = await fetch(`/api/history?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(20000) });
-    const d = await r.json();
+    return await safeJson(r);
     return d; // { ok: true, bars: [...], yearStartPrice, count } or { ok: false, error }
   } catch (e) { return { ok: false, error: e.message, bars: [], yearStartPrice: null }; }
 };
@@ -171,8 +165,7 @@ const fetchHistory = async (symbol) => {
 const fetchEvents = async (symbol) => {
   try {
     const r = await fetch(`/api/events?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(12000) });
-    const d = await r.json();
-    return d;
+    return await safeJson(r);
   } catch (e) { return { ok: false, error: e.message, earnings: null, macroEvents: [], indicators: {} }; }
 };
 
@@ -181,8 +174,7 @@ const FUTU_BRIDGE = "http://localhost:9876";
 const fetchIV = async (symbol, price) => {
   try {
     const r = await fetch(`${FUTU_BRIDGE}/api/option-volatility?symbol=${encodeURIComponent(symbol)}&price=${price}`, { signal: AbortSignal.timeout(8000) });
-    const d = await r.json();
-    return d;
+    return await safeJson(r);
   } catch (e) { return { ok: false, error: e.message }; }
 };
 
@@ -230,8 +222,8 @@ const mergeLiveWithPreset = (ticker, prof) => {
   ];
   const verdict = preset?.verdict || `${p.companyName || ticker} 当前价 ${cur}${price}，距52周高点 ${(((price - high52) / high52) * 100).toFixed(0)}%。建议结合基本面深入研究后再做投资决策。`;
   const score = preset?.score || 50;
-  const rating = preset?.rating || (score >= 70 ? "买入" : score >= 55 ? "持有" : score >= 40 ? "观望" : "回避");
-  const sub = preset?.sub || (score >= 70 ? "Accumulate" : score >= 55 ? "Hold" : "Neutral");
+  const rating = preset?.rating || scoreToRating(score);
+  const sub = preset?.sub || scoreToSub(score);
 
   return {
     name: p.companyName || preset?.name || ticker, market, price, cur,
@@ -453,18 +445,8 @@ function runAnalysis(ticker, stockData, dataSource) {
   const priceVsSMA200 = curSMA200 ? ((p.price - curSMA200) / curSMA200 * 100) : 0;
 
   const f = p.fin;
-  let fundScore = 50;
   const hasFinData = f.fwdPE != null;
-  if (hasFinData) {
-    if (f.fwdPE < 20) fundScore += 15; else if (f.fwdPE < 30) fundScore += 5; else fundScore -= 10;
-    if (f.revG > 30) fundScore += 15; else if (f.revG > 10) fundScore += 8; else fundScore -= 5;
-    if (f.niG > 30) fundScore += 10; else if (f.niG > 0) fundScore += 5; else fundScore -= 10;
-    if (f.roe > 25) fundScore += 10; else if (f.roe > 15) fundScore += 5;
-    if (f.gm > 50) fundScore += 5;
-    fundScore = Math.min(100, Math.max(0, fundScore));
-  } else {
-    fundScore = null; // no data, show N/A
-  }
+  const fundScore = calcFundScore(f);
 
   let techScore = 50;
   if (curRSI > 50 && curRSI < 70) techScore += 10; else if (curRSI > 70) techScore -= 5; else if (curRSI < 30) techScore += 10;
@@ -549,24 +531,10 @@ function runAnalysis(ticker, stockData, dataSource) {
   const expectedReturn = +((expectedValue - curPrice) / curPrice * 100).toFixed(1);
 
   // Dynamic composite score from fundamentals + technicals
-  const compositeScore = (() => {
-    let s = 50; // base
-    if (fundScore != null) {
-      const fundDelta = fundScore - 50; // -50..+50
-      s += fundDelta * 0.45; // fundamentals weight 45%
-    }
-    const techDelta = techScore - 50;
-    s += techDelta * 0.40; // technicals weight 40%
-    // Sentiment weight 15%
-    const sentBuzz = p.sent?.buzz ?? 50;
-    s += (sentBuzz - 50) * 0.15;
-    return Math.round(Math.min(100, Math.max(0, s)));
-  })();
+  const compositeScore = calcCompositeScore(fundScore, techScore, p.sent?.buzz);
 
   // Rating thresholds — prefer dynamic score, fallback to preset only if no live data
   const preset = PRESETS[ticker];
-  const scoreToRating = (sc) => sc >= 70 ? "买入" : sc >= 55 ? "持有" : sc >= 40 ? "观望" : "回避";
-  const scoreToSub = (sc) => sc >= 70 ? "Accumulate" : sc >= 55 ? "Hold" : sc >= 40 ? "Neutral" : "Avoid";
   const usePreset = preset && dataSource !== "live";
   const finalScore = dataSource === "live" ? compositeScore : (preset?.score ?? compositeScore);
   const rating = usePreset ? (preset?.rating || scoreToRating(finalScore)) : scoreToRating(finalScore);
@@ -675,7 +643,7 @@ export default function StockAnalysisTool() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
-  const [apiKey, setApiKey] = useState(DEFAULT_KEY);
+  const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [sentiment, setSentiment] = useState(null);
   const [macro, setMacro] = useState(null);
@@ -694,27 +662,18 @@ export default function StockAnalysisTool() {
     let stockData = null, dataSource = "demo";
     const status = [];
 
-    // 1. Try FMP profile API for live price data (via proxy, then direct fallback)
+    // 1. Try FMP profile API for live price data (via serverless proxy)
     {
       let profileResult = null;
       try {
         const proxyRes = await fetchProfile(t);
         if (proxyRes?.ok && proxyRes.profile) {
           profileResult = { profile: proxyRes.profile, source: proxyRes.source };
+        } else if (!proxyRes?.ok) {
+          status.push({ name: "FMP 行情", ok: false, level: "missing", note: proxyRes?.error || "Profile API 返回错误" });
         }
       } catch (e) {
-        console.warn("Profile proxy failed:", e.message);
-      }
-      // Direct browser fallback if proxy didn't work
-      if (!profileResult && apiKey) {
-        try {
-          const directRes = await fmpFetchProfile(t, apiKey);
-          if (directRes?.profile) {
-            profileResult = directRes;
-          }
-        } catch (e) {
-          console.warn("Direct FMP API failed:", e.message);
-        }
+        status.push({ name: "FMP 行情", ok: false, level: "missing", note: `代理请求失败: ${e.message}` });
       }
       if (profileResult?.profile) {
         stockData = mergeLiveWithPreset(t, profileResult.profile);
@@ -839,32 +798,15 @@ export default function StockAnalysisTool() {
         finAvailable: "live",
       };
       // Recalculate fundamental score with real data
-      let liveFundScore = 50;
-      const lf = updatedFin;
-      if (lf.fwdPE != null) {
-        if (lf.fwdPE < 20) liveFundScore += 15; else if (lf.fwdPE < 30) liveFundScore += 5; else liveFundScore -= 10;
-        if (lf.revG > 30) liveFundScore += 15; else if (lf.revG > 10) liveFundScore += 8; else liveFundScore -= 5;
-        if (lf.niG > 30) liveFundScore += 10; else if (lf.niG > 0) liveFundScore += 5; else liveFundScore -= 10;
-        if (lf.roe > 25) liveFundScore += 10; else if (lf.roe > 15) liveFundScore += 5;
-        if (lf.gm > 50) liveFundScore += 5;
-        liveFundScore = Math.min(100, Math.max(0, liveFundScore));
-      } else {
-        liveFundScore = null;
-      }
+      const liveFundScore = calcFundScore(updatedFin);
 
       analysis = { ...analysis, fin: updatedFin, finSource: "live", fundScore: liveFundScore };
 
       // Recalculate composite score with real financials
       {
-        const fs = liveFundScore, ts = analysis.techScore || analysis.fundScore || 50;
-        const sentBuzz = analysis.sent?.buzz ?? 50;
-        let comp = 50;
-        if (fs != null) comp += (fs - 50) * 0.45;
-        comp += ((analysis.techScore ?? 50) - 50) * 0.40;
-        comp += (sentBuzz - 50) * 0.15;
-        const newScore = Math.round(Math.min(100, Math.max(0, comp)));
-        const newRating = newScore >= 70 ? "买入" : newScore >= 55 ? "持有" : newScore >= 40 ? "观望" : "回避";
-        const newSub = newScore >= 70 ? "Accumulate" : newScore >= 55 ? "Hold" : newScore >= 40 ? "Neutral" : "Avoid";
+        const newScore = calcCompositeScore(liveFundScore, analysis.techScore ?? 50, analysis.sent?.buzz);
+        const newRating = scoreToRating(newScore);
+        const newSub = scoreToSub(newScore);
         analysis = { ...analysis, score: newScore, rating: newRating, sub: newSub };
       }
       setResult(analysis);
@@ -883,7 +825,7 @@ export default function StockAnalysisTool() {
 
     setDataStatus(status);
     setLoading(false);
-  }, [apiKey]);
+  }, []);
 
   const doSearch = () => doAnalyze(input);
   const tabs = [
