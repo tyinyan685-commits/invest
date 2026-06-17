@@ -95,15 +95,19 @@ const scoreToRating = (sc) => sc >= 70 ? "买入" : sc >= 55 ? "持有" : sc >= 
 const scoreToSub = (sc) => sc >= 70 ? "Accumulate" : sc >= 55 ? "Hold" : sc >= 40 ? "Neutral" : "Avoid";
 
 // ═══════════════════ PRICE GENERATOR (DEMO) ═══════════════════
-const genPrices = (cur, days, vol) => {
-  const data = []; let p = cur * (0.88 + Math.random() * 0.06);
+// Seeded PRNG (mulberry32) — same ticker always produces same chart, avoids flicker
+const seedHash = (str) => { let h = 0; for (let i = 0; i < str.length; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0; return h >>> 0; };
+const mulberry32 = (seed) => { let s = seed; return () => { s = (s + 0x6D2B79F5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };
+const genPrices = (cur, days, vol, ticker = "") => {
+  const rng = mulberry32(seedHash(ticker || "DEFAULT"));
+  const data = []; let p = cur * (0.88 + rng() * 0.06);
   for (let i = 0; i < days; i++) {
     const trend = (i / days) * (cur - p) * 0.015;
-    const chg = trend + (Math.random() - 0.47) * p * vol;
+    const chg = trend + (rng() - 0.47) * p * vol;
     const o = p, c = +(p + chg).toFixed(2);
-    const h = +(Math.max(o, c) + Math.random() * Math.abs(chg) * 0.5).toFixed(2);
-    const l = +(Math.min(o, c) - Math.random() * Math.abs(chg) * 0.5).toFixed(2);
-    const v = Math.floor(2e6 + Math.random() * 25e6);
+    const h = +(Math.max(o, c) + rng() * Math.abs(chg) * 0.5).toFixed(2);
+    const l = +(Math.min(o, c) - rng() * Math.abs(chg) * 0.5).toFixed(2);
+    const v = Math.floor(2e6 + rng() * 25e6);
     data.push({ date: `D-${days - i}`, open: +o.toFixed(2), high: h, low: l, close: c, volume: v });
     p = c;
   }
@@ -349,7 +353,7 @@ const PRESETS = {
 function runAnalysis(ticker, stockData, dataSource) {
   const p = stockData;
   const hasHistory = p.prices && p.prices.length >= 20;
-  const prices = hasHistory ? p.prices : genPrices(p.price, 80, p.vol);
+  const prices = hasHistory ? p.prices : genPrices(p.price, 80, p.vol, ticker);
   const closes = prices.map(d => d.close);
 
   // Moving averages
@@ -614,7 +618,7 @@ const SectionTitle = ({ children, icon }) => (
   </div>
 );
 const TabBtn = ({ label, active, onClick }) => (
-  <button onClick={onClick} style={{ padding: "8px 18px", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, background: active ? T.blue : "transparent", color: active ? "#fff" : T.muted, transition: "all 0.2s" }}>{label}</button>
+  <button className="sa-btn" onClick={onClick} style={{ padding: "8px 18px", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, background: active ? T.blue : "transparent", color: active ? "#fff" : T.muted }}>{label}</button>
 );
 const RiskBadge = ({ level }) => {
   const c = level.includes("高") ? T.red : level.includes("中") ? T.yellow : T.green;
@@ -810,9 +814,9 @@ export default function StockAnalysisTool() {
         analysis = { ...analysis, score: newScore, rating: newRating, sub: newSub };
       }
       setResult(analysis);
-      status.push({ name: "财务报表", ok: true, level: fin.quarters?.length >= 4 ? "complete" : fin.eps > 0 ? "degraded" : "degraded", note: `PE ${realPE}x, 营收 ${fmt(fin.revenue)}, EPS $${fin.eps.toFixed(2)}${fin.operatingCF ? ", OCF " + fmt(fin.operatingCF) : ""}${fin.cash ? ", 现金 " + fmt(fin.cash) : ""}${fin.quarters?.length < 4 ? " (季报数据不完整)" : ""}` });
+      status.push({ name: "财务报表", ok: true, level: fin.quarters?.length >= 4 ? "complete" : fin.eps > 0 ? "degraded" : "degraded", note: `PE ${realPE}x, 营收 ${fmt(fin.revenue)}, EPS ${analysis.cur}${fin.eps.toFixed(2)}${fin.operatingCF ? ", OCF " + fmt(fin.operatingCF) : ""}${fin.cash ? ", 现金 " + fmt(fin.cash) : ""}${fin.quarters?.length < 4 ? " (季报数据不完整)" : ""}` });
       if (fin.analystTarget?.avgTarget) {
-        status.push({ name: "分析师预测", ok: true, level: fin.analystTarget.count >= 5 ? "complete" : "degraded", note: `${fin.analystTarget.count}位分析师, 均价 $${fin.analystTarget.avgTarget.toFixed(1)}${fin.analystTarget.count < 5 ? " (覆盖较少)" : ""}` });
+        status.push({ name: "分析师预测", ok: true, level: fin.analystTarget.count >= 5 ? "complete" : "degraded", note: `${fin.analystTarget.count}位分析师, 均价 ${analysis.cur}${fin.analystTarget.avgTarget.toFixed(1)}${fin.analystTarget.count < 5 ? " (覆盖较少)" : ""}` });
       } else {
         status.push({ name: "分析师预测", ok: false, level: "missing", note: "分析师目标价不可用" });
       }
@@ -837,6 +841,7 @@ export default function StockAnalysisTool() {
 
   return (
     <div style={{ background: T.bg, color: T.text, fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', monospace", minHeight: "100vh", padding: "20px 24px", maxWidth: 1100, margin: "0 auto" }}>
+      <style>{`.sa-btn{transition:all .15s ease}.sa-btn:hover{opacity:.85}.sa-btn:active{transform:scale(.94)}`}</style>
 
       {/* HEADER */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
@@ -869,7 +874,7 @@ export default function StockAnalysisTool() {
           placeholder="输入任意股票代码，如 AAPL, NVDA, 9992.HK, 0700.HK, MSFT ..."
           style={{ flex: 1, minWidth: 220, padding: "10px 14px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.card, color: T.text, fontSize: 14, fontFamily: "inherit", outline: "none" }}
         />
-        <button onClick={doSearch} disabled={loading}
+        <button className="sa-btn" onClick={doSearch} disabled={loading}
           style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: loading ? T.dim : T.blue, color: "#fff", fontWeight: 700, cursor: loading ? "wait" : "pointer", fontSize: 14, minWidth: 80 }}>
           {loading ? "分析中..." : "分析"}
         </button>
@@ -879,7 +884,7 @@ export default function StockAnalysisTool() {
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 20 }}>
         <span style={{ fontSize: 11, color: T.dim, lineHeight: "28px" }}>快速选择:</span>
         {Object.entries(PRESETS).map(([k, v]) => (
-          <button key={k} onClick={() => { setInput(k); doAnalyze(k); }}
+          <button key={k} className="sa-btn" onClick={() => { setInput(k); doAnalyze(k); }}
             style={{ padding: "4px 12px", borderRadius: 6, border: `1px solid ${activeTicker === k ? T.blue : T.border}`, background: activeTicker === k ? T.blue + "22" : "transparent", color: activeTicker === k ? T.blue : T.muted, fontSize: 12, cursor: "pointer", fontWeight: activeTicker === k ? 700 : 400 }}>
             {k} {v.name.split(" ")[0]}
           </button>
@@ -995,8 +1000,7 @@ export default function StockAnalysisTool() {
           </div>
 
           {/* ═══ OVERVIEW ═══ */}
-          {tab === "overview" && (
-            <div>
+          <div style={{ display: tab === "overview" ? "block" : "none" }}>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
                 <MetricCard label="Forward PE" value={result.fin.fwdPE != null ? result.fin.fwdPE + "x" : "N/A"} sub={`行业 ${result.peers[2]?.pe || "-"}x`} color={result.fin.fwdPE != null && result.fin.fwdPE < 25 ? T.green : result.fin.fwdPE != null ? T.yellow : T.dim} highlight={T.blue} />
                 <MetricCard label="营收增速" value={result.fin.revG ? pct(result.fin.revG) : "N/A"} sub={`净利润 ${result.fin.niG ? pct(result.fin.niG) : "N/A"}`} color={result.fin.revG > 20 ? T.green : result.fin.revG > 0 ? T.yellow : result.fin.revG ? T.red : T.dim} highlight={T.green} />
@@ -1091,8 +1095,8 @@ export default function StockAnalysisTool() {
                       </div>
                       <div style={{ fontSize: 12, color: T.muted, marginTop: 4, display: "flex", gap: 14, flexWrap: "wrap" }}>
                         {events.earnings.fiscalQuarterEnding && <span>财报季度: {events.earnings.fiscalQuarterEnding}</span>}
-                        {events.earnings.epsForecast != null && <span>EPS 预期: ${events.earnings.epsForecast.toFixed(2)}</span>}
-                        {events.earnings.lastYearEPS != null && <span>去年同期EPS: ${events.earnings.lastYearEPS.toFixed(2)}</span>}
+                        {events.earnings.epsForecast != null && <span>EPS 预期: {result.cur}{events.earnings.epsForecast.toFixed(2)}</span>}
+                        {events.earnings.lastYearEPS != null && <span>去年同期EPS: {result.cur}{events.earnings.lastYearEPS.toFixed(2)}</span>}
                         {events.earnings.analystCount != null && <span>{events.earnings.analystCount}位分析师预估</span>}
                         {events.earnings.lastQuarter && <span>上季: {events.earnings.lastQuarter}</span>}
                       </div>
@@ -1152,11 +1156,9 @@ export default function StockAnalysisTool() {
                 </Card>
               )}
             </div>
-          )}
 
           {/* ═══ FUNDAMENTAL ═══ */}
-          {tab === "fundamental" && (
-            <div>
+          <div style={{ display: tab === "fundamental" ? "block" : "none" }}>
               {result.finSource !== "live" && (
                 <div style={{ padding: "10px 14px", borderRadius: 8, background: T.yellow + "18", border: `1px solid ${T.yellow}44`, fontSize: 13, color: T.yellow, marginBottom: 16, lineHeight: 1.7 }}>
                   &#x26A0;&#xFE0F; <b>以下财务指标为预设参考值，未经实时财报验证，可能不准确！</b>
@@ -1360,11 +1362,9 @@ export default function StockAnalysisTool() {
                 </ResponsiveContainer>
               </Card>
             </div>
-          )}
 
           {/* ═══ TECHNICAL ═══ */}
-          {tab === "technical" && (
-            <div>
+          <div style={{ display: tab === "technical" ? "block" : "none" }}>
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle icon="&#x1F4C8;">价格走势 & 均线系统 {result.dataSource === "live" && <Badge text="实时K线" color={T.green} />}</SectionTitle>
                 <ResponsiveContainer width="100%" height={300}>
@@ -1476,11 +1476,9 @@ export default function StockAnalysisTool() {
                 </Card>
               )}
             </div>
-          )}
 
           {/* ═══ POSITION ═══ */}
-          {tab === "position" && (
-            <div>
+          <div style={{ display: tab === "position" ? "block" : "none" }}>
               <Card style={{ marginBottom: 16, background: `linear-gradient(135deg, ${T.card}, #1a2744)` }}>
                 <SectionTitle icon="&#x1F3AF;">仓位计划 (总目标 = 1.0 单位, 中等仓)</SectionTitle>
                 <div style={{ fontSize: 12, color: T.muted, marginBottom: 14 }}>ATR {result.tech.atrPct.toFixed(1)}% → {result.pos.overAlloc}</div>
@@ -1632,7 +1630,7 @@ export default function StockAnalysisTool() {
                       <div style={{ fontSize: 11, color: T.muted }}>{item.label}</div>
                       <div style={{ fontSize: 18, fontWeight: 800, color: item.color }}>±{item.val}%</div>
                       <div style={{ fontSize: 10, color: T.dim }}>
-                        ≈ ${item.label === "日内" ? (result.price * item.val / 100).toFixed(2) : (result.price * item.val / 100).toFixed(1)}
+                        ≈ {result.cur}{item.label === "日内" ? (result.price * item.val / 100).toFixed(2) : (result.price * item.val / 100).toFixed(1)}
                       </div>
                     </div>
                   ))}
@@ -1650,7 +1648,7 @@ export default function StockAnalysisTool() {
                         <Badge text={`${(sc.prob * 100).toFixed(0)}%概率`} color={sc.color} />
                       </div>
                       <div style={{ fontSize: 24, fontWeight: 800, color: T.text, marginBottom: 4 }}>
-                        ${sc.target.toFixed(2)}
+                        {result.cur}{sc.target.toFixed(2)}
                       </div>
                       <div style={{ fontSize: 12, color: sc.target > result.price ? T.green : T.red, fontWeight: 600, marginBottom: 4 }}>
                         {sc.target > result.price ? "+" : ""}{((sc.target - result.price) / result.price * 100).toFixed(1)}%
@@ -1667,7 +1665,7 @@ export default function StockAnalysisTool() {
                     <div style={{ flex: "1 1 120px" }}>
                       <div style={{ fontSize: 11, color: T.muted }}>预期价值</div>
                       <div style={{ fontSize: 20, fontWeight: 800, color: result.scenarios.expectedReturn >= 0 ? T.green : T.red }}>
-                        ${result.scenarios.expectedValue}
+                        {result.cur}{result.scenarios.expectedValue}
                       </div>
                     </div>
                     <div style={{ flex: "1 1 120px" }}>
@@ -1685,7 +1683,7 @@ export default function StockAnalysisTool() {
                     <div style={{ flex: "1 1 120px" }}>
                       <div style={{ fontSize: 11, color: T.muted }}>建议止损</div>
                       <div style={{ fontSize: 20, fontWeight: 800, color: T.red }}>
-                        ${result.scenarios.stopLoss}
+                        {result.cur}{result.scenarios.stopLoss}
                       </div>
                       <div style={{ fontSize: 10, color: T.dim }}>SMA50 × 0.85</div>
                     </div>
@@ -1709,22 +1707,20 @@ export default function StockAnalysisTool() {
                           <div style={{ position: "absolute", top: -2, left: -14, fontSize: 9, color: T.text, whiteSpace: "nowrap" }}>现价</div>
                         </div>
                         {result.scenarios.items.map((sc, i) => (
-                          <div key={i} style={{ position: "absolute", left: `${toPercent(sc.target)}%`, top: "50%", transform: "translateY(-50%)", width: 8, height: 8, borderRadius: "50%", background: sc.color, border: "2px solid #fff", zIndex: 3 }} title={`${sc.name}: $${sc.target.toFixed(2)}`} />
+                          <div key={i} style={{ position: "absolute", left: `${toPercent(sc.target)}%`, top: "50%", transform: "translateY(-50%)", width: 8, height: 8, borderRadius: "50%", background: sc.color, border: "2px solid #fff", zIndex: 3 }} title={`${sc.name}: ${result.cur}${sc.target.toFixed(2)}`} />
                         ))}
-                        <div style={{ position: "absolute", left: `${toPercent(result.scenarios.stopLoss)}%`, top: "50%", transform: "translateY(-50%)", width: 0, height: 0, borderLeft: "5px solid transparent", borderRight: "5px solid transparent", borderBottom: `8px solid ${T.red}`, zIndex: 3 }} title={`止损: $${result.scenarios.stopLoss}`} />
-                        <div style={{ position: "absolute", bottom: 2, left: 4, fontSize: 9, color: T.dim }}>${minP.toFixed(0)}</div>
-                        <div style={{ position: "absolute", bottom: 2, right: 4, fontSize: 9, color: T.dim }}>${maxP.toFixed(0)}</div>
+                        <div style={{ position: "absolute", left: `${toPercent(result.scenarios.stopLoss)}%`, top: "50%", transform: "translateY(-50%)", width: 0, height: 0, borderLeft: "5px solid transparent", borderRight: "5px solid transparent", borderBottom: `8px solid ${T.red}`, zIndex: 3 }} title={`止损: ${result.cur}${result.scenarios.stopLoss}`} />
+                        <div style={{ position: "absolute", bottom: 2, left: 4, fontSize: 9, color: T.dim }}>{result.cur}{minP.toFixed(0)}</div>
+                        <div style={{ position: "absolute", bottom: 2, right: 4, fontSize: 9, color: T.dim }}>{result.cur}{maxP.toFixed(0)}</div>
                       </>
                     );
                   })()}
                 </div>
               </Card>
             </div>
-          )}
 
           {/* ═══ SENTIMENT ═══ */}
-          {tab === "sentiment" && (
-            <div>
+          <div style={{ display: tab === "sentiment" ? "block" : "none" }}>
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
                 {/* StockTwits Real Sentiment */}
                 <Card style={{ flex: "1 1 320px", minWidth: 280 }}>
@@ -1846,10 +1842,9 @@ export default function StockAnalysisTool() {
                 </div>
               </Card>
             </div>
-          )}
 
           {/* ═══ REPORT ═══ */}
-          {tab === "report" && (
+          <div style={{ display: tab === "report" ? "block" : "none" }}>
             <Card style={{ fontFamily: "'SF Mono', 'Fira Code', monospace", fontSize: 13, lineHeight: 2 }}>
               {/* Header */}
               <div style={{ borderBottom: `1px solid ${T.border}`, paddingBottom: 12, marginBottom: 12 }}>
@@ -2082,7 +2077,7 @@ export default function StockAnalysisTool() {
                 本报告由 StockAnalyzer 自动生成 · 仅供参考，不构成投资建议 · 投资有风险，入市需谨慎
               </div>
             </Card>
-          )}
+          </div>
         </>
       )}
 
