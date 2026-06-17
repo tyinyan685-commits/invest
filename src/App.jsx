@@ -618,7 +618,7 @@ const SectionTitle = ({ children, icon }) => (
   </div>
 );
 const TabBtn = ({ label, active, onClick }) => (
-  <button className="sa-btn" onClick={onClick} style={{ padding: "8px 18px", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, background: active ? T.blue : "transparent", color: active ? "#fff" : T.muted }}>{label}</button>
+  <button className="sa-btn sa-tab-btn" onClick={onClick} style={{ padding: "8px 18px", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, background: active ? T.blue : "transparent", color: active ? "#fff" : T.muted }}>{label}</button>
 );
 const RiskBadge = ({ level }) => {
   const c = level.includes("高") ? T.red : level.includes("中") ? T.yellow : T.green;
@@ -639,8 +639,21 @@ const ScoreGauge = ({ score, label, size = 90 }) => {
   );
 };
 
+// ═══════════════════ MOBILE HOOK ═══════════════════
+const useIsMobile = (bp = 640) => {
+  const [m, setM] = useState(() => typeof window !== "undefined" && window.innerWidth < bp);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${bp}px)`);
+    const h = (e) => setM(e.matches);
+    mq.addEventListener("change", h);
+    return () => mq.removeEventListener("change", h);
+  }, [bp]);
+  return m;
+};
+
 // ═══════════════════ MAIN COMPONENT ═══════════════════
 export default function StockAnalysisTool() {
+  const mob = useIsMobile();
   const [input, setInput] = useState("9992.HK");
   const [activeTicker, setActiveTicker] = useState("");
   const [tab, setTab] = useState("overview");
@@ -840,12 +853,25 @@ export default function StockAnalysisTool() {
   const tip = { background: T.cardAlt, border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 12, color: T.text };
 
   return (
-    <div style={{ background: T.bg, color: T.text, fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', monospace", minHeight: "100vh", padding: "20px 24px", maxWidth: 1100, margin: "0 auto" }}>
-      <style>{`.sa-btn{transition:all .15s ease}.sa-btn:hover{opacity:.85}.sa-btn:active{transform:scale(.94)}`}</style>
+    <div style={{ background: T.bg, color: T.text, fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', monospace", minHeight: "100vh", padding: mob ? "12px 10px" : "20px 24px", maxWidth: 1100, margin: "0 auto" }}>
+      <style>{`
+        .sa-btn{transition:all .15s ease}.sa-btn:hover{opacity:.85}.sa-btn:active{transform:scale(.94)}
+        @media(max-width:640px){
+          .sa-qtable{overflow-x:auto;-webkit-overflow-scrolling:touch}
+          .sa-qtable table{min-width:680px}
+          .sa-tab-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;flex-wrap:nowrap!important}
+          .sa-tab-scroll::-webkit-scrollbar{display:none}
+          .sa-chart-h300 .recharts-wrapper{height:220px!important}
+          .sa-chart-h240 .recharts-wrapper{height:180px!important}
+          .sa-chart-h160 .recharts-wrapper{height:130px!important}
+          .sa-tab-btn{padding:6px 12px!important;font-size:12px!important;white-space:nowrap;flex-shrink:0}
+          .sa-scenario-bar{min-height:50px}
+        }
+      `}</style>
 
       {/* HEADER */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
-        <span style={{ fontSize: 22, fontWeight: 800, color: T.blue }}>StockAnalyzer</span>
+        <span style={{ fontSize: mob ? 18 : 22, fontWeight: 800, color: T.blue }}>StockAnalyzer</span>
         <span style={{ fontSize: 12, color: T.dim, background: T.card, padding: "2px 8px", borderRadius: 4 }}>v2.1</span>
         <span style={{ fontSize: 11, color: T.dim }}>多维度股票监测评估系统</span>
         {result && <Badge text={result.dataSource === "live" ? (result.finSource === "live" ? "实时行情 + 实时财务" : result.finAvailable === "preset" ? "实时行情 + 预设财务(参考)" : "实时行情 · 财务数据不可用") : "演示数据"} color={result.dataSource === "live" ? (result.finSource === "live" ? T.green : T.yellow) : T.red} />}
@@ -860,7 +886,7 @@ export default function StockAnalysisTool() {
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
             <input value={apiKey} onChange={e => setApiKey(e.target.value)}
               placeholder="输入 FMP API Key (financialmodelingprep.com 免费注册)"
-              style={{ flex: 1, minWidth: 260, padding: "6px 10px", borderRadius: 6, border: `1px solid ${T.border}`, background: T.card, color: T.text, fontSize: 12, fontFamily: "inherit", outline: "none" }}
+              style={{ flex: 1, minWidth: mob ? 160 : 260, padding: "6px 10px", borderRadius: 6, border: `1px solid ${T.border}`, background: T.card, color: T.text, fontSize: 12, fontFamily: "inherit", outline: "none" }}
             />
             <span style={{ fontSize: 10, color: T.dim }}>Key 仅存于浏览器内存</span>
           </div>
@@ -871,11 +897,11 @@ export default function StockAnalysisTool() {
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
         <input value={input} onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === "Enter" && doSearch()}
-          placeholder="输入任意股票代码，如 AAPL, NVDA, 9992.HK, 0700.HK, MSFT ..."
-          style={{ flex: 1, minWidth: 220, padding: "10px 14px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.card, color: T.text, fontSize: 14, fontFamily: "inherit", outline: "none" }}
+          placeholder={mob ? "输入股票代码，如 AAPL, 0700.HK" : "输入任意股票代码，如 AAPL, NVDA, 9992.HK, 0700.HK, MSFT ..."}
+          style={{ flex: 1, minWidth: mob ? 140 : 220, padding: mob ? "8px 10px" : "10px 14px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.card, color: T.text, fontSize: mob ? 13 : 14, fontFamily: "inherit", outline: "none" }}
         />
         <button className="sa-btn" onClick={doSearch} disabled={loading}
-          style={{ padding: "10px 24px", borderRadius: 8, border: "none", background: loading ? T.dim : T.blue, color: "#fff", fontWeight: 700, cursor: loading ? "wait" : "pointer", fontSize: 14, minWidth: 80 }}>
+          style={{ padding: mob ? "8px 16px" : "10px 24px", borderRadius: 8, border: "none", background: loading ? T.dim : T.blue, color: "#fff", fontWeight: 700, cursor: loading ? "wait" : "pointer", fontSize: mob ? 13 : 14, minWidth: mob ? 64 : 80 }}>
           {loading ? "分析中..." : "分析"}
         </button>
       </div>
@@ -953,8 +979,8 @@ export default function StockAnalysisTool() {
           <Card style={{ marginBottom: 16, background: `linear-gradient(135deg, ${T.card}, ${T.cardAlt})` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
               <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                  <span style={{ fontSize: 22, fontWeight: 800 }}>{result.ticker}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: mob ? 6 : 10, marginBottom: 6, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: mob ? 18 : 22, fontWeight: 800 }}>{result.ticker}</span>
                   <Badge text={result.market === "US" ? "美股" : "港股"} color={T.blue} />
                   <Badge text={result.cat} color={T.purple} />
                   {dataStatus.length > 0 && (() => {
@@ -967,7 +993,7 @@ export default function StockAnalysisTool() {
                 </div>
                 <div style={{ fontSize: 15, color: T.muted, marginBottom: 8 }}>{result.name}</div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-                  <span style={{ fontSize: 36, fontWeight: 800, color: T.text }}>{result.cur}{result.price?.toFixed(2)}</span>
+                  <span style={{ fontSize: mob ? 28 : 36, fontWeight: 800, color: T.text }}>{result.cur}{result.price?.toFixed(2)}</span>
                   {result.liveData?.change != null && (
                     <span style={{ fontSize: 14, color: result.liveData.change < 0 ? T.red : T.green, fontWeight: 600 }}>
                       {result.liveData.change > 0 ? "+" : ""}{result.liveData.change?.toFixed(2)} ({result.liveData.chgPct?.toFixed(2)}%)
@@ -995,7 +1021,7 @@ export default function StockAnalysisTool() {
           </Card>
 
           {/* TABS */}
-          <div style={{ display: "flex", gap: 4, marginBottom: 16, background: T.card, padding: 4, borderRadius: 10, flexWrap: "wrap" }}>
+          <div className={mob ? "sa-tab-scroll" : ""} style={{ display: "flex", gap: 4, marginBottom: 16, background: T.card, padding: 4, borderRadius: 10, flexWrap: "wrap" }}>
             {tabs.map(t => <TabBtn key={t.key} label={t.label} active={tab === t.key} onClick={() => setTab(t.key)} />)}
           </div>
 
@@ -1024,7 +1050,7 @@ export default function StockAnalysisTool() {
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
                 <Card style={{ flex: "1 1 300px", minWidth: 280 }}>
                   <SectionTitle icon="&#x1F3AF;">多维评分雷达</SectionTitle>
-                  <ResponsiveContainer width="100%" height={240}>
+                  <ResponsiveContainer width="100%" height={mob ? 180 : 240}>
                     <RadarChart data={result.radarData}>
                       <PolarGrid stroke={T.border} />
                       <PolarAngleAxis dataKey="dim" tick={{ fill: T.muted, fontSize: 12 }} />
@@ -1168,7 +1194,7 @@ export default function StockAnalysisTool() {
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
                 <Card style={{ flex: "1 1 320px", minWidth: 280 }}>
                   <SectionTitle icon="&#x1F4B0;">估值指标 {result.finSource === "live" ? <Badge text="实时数据" color={T.green} /> : result.finAvailable === "preset" ? <Badge text="预设参考值" color={T.yellow} /> : <Badge text="数据不可用" color={T.red} />}</SectionTitle>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 10 }}>
                     {[
                       { l: "PE (TTM)", v: result.fin.pe != null ? result.fin.pe + "x" : "N/A" },
                       { l: "Forward PE", v: result.fin.fwdPE != null ? result.fin.fwdPE + "x" : "N/A", hl: T.blue },
@@ -1199,7 +1225,7 @@ export default function StockAnalysisTool() {
                 </Card>
                 <Card style={{ flex: "1 1 320px", minWidth: 280 }}>
                   <SectionTitle icon="&#x1F4CA;">增长与盈利 {result.finSource === "live" ? <Badge text="实时" color={T.green} /> : result.finAvailable === "preset" ? <Badge text="参考值" color={T.yellow} /> : null}</SectionTitle>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 10 }}>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>营收</div>
                       <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.rev ? result.cur + fmt(result.fin.rev) : "N/A"}</div>
@@ -1249,8 +1275,8 @@ export default function StockAnalysisTool() {
               {result.fin.quarters && result.fin.quarters.length >= 2 && (
                 <Card style={{ marginBottom: 16 }}>
                   <SectionTitle icon="&#x1F4C8;">季度环比趋势 <Badge text={`${result.fin.quarters.length}个季度`} color={T.cyan} /></SectionTitle>
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <div className="sa-qtable" style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", minWidth: 680, borderCollapse: "collapse", fontSize: mob ? 11 : 12 }}>
                       <thead>
                         <tr style={{ borderBottom: `1px solid ${T.border}` }}>
                           <th style={{ padding: "8px 10px", textAlign: "left", color: T.muted, fontWeight: 600 }}>季度</th>
@@ -1349,7 +1375,7 @@ export default function StockAnalysisTool() {
               )}
               <Card>
                 <SectionTitle icon="&#x1F50D;">可比公司估值对比</SectionTitle>
-                <ResponsiveContainer width="100%" height={220}>
+                <ResponsiveContainer width="100%" height={mob ? 170 : 220}>
                   <BarChart data={[{ n: result.ticker, pe: result.fin.fwdPE, pb: result.fin.pb }, ...result.peers.map(p => ({ ...p }))]} barGap={4}>
                     <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
                     <XAxis dataKey="n" tick={{ fill: T.muted, fontSize: 12 }} />
@@ -1367,7 +1393,7 @@ export default function StockAnalysisTool() {
           <div style={{ display: tab === "technical" ? "block" : "none" }}>
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle icon="&#x1F4C8;">价格走势 & 均线系统 {result.dataSource === "live" && <Badge text="实时K线" color={T.green} />}</SectionTitle>
-                <ResponsiveContainer width="100%" height={300}>
+                <ResponsiveContainer width="100%" height={mob ? 220 : 300}>
                   <LineChart data={result.chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
                     <XAxis dataKey="date" tick={{ fill: T.dim, fontSize: 10 }} interval={Math.floor(result.chartData.length / 6)} />
@@ -1391,7 +1417,7 @@ export default function StockAnalysisTool() {
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
                 <Card style={{ flex: "1 1 45%", minWidth: 300 }}>
                   <SectionTitle icon="&#x1F4CA;">RSI (14)</SectionTitle>
-                  <ResponsiveContainer width="100%" height={160}>
+                  <ResponsiveContainer width="100%" height={mob ? 120 : 160}>
                     <AreaChart data={result.chartData}>
                       <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
                       <XAxis dataKey="date" tick={{ fill: T.dim, fontSize: 10 }} interval={14} />
@@ -1406,7 +1432,7 @@ export default function StockAnalysisTool() {
                 </Card>
                 <Card style={{ flex: "1 1 45%", minWidth: 300 }}>
                   <SectionTitle icon="&#x1F4C9;">MACD (12,26,9)</SectionTitle>
-                  <ResponsiveContainer width="100%" height={160}>
+                  <ResponsiveContainer width="100%" height={mob ? 120 : 160}>
                     <ComposedChart data={result.chartData}>
                       <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
                       <XAxis dataKey="date" tick={{ fill: T.dim, fontSize: 10 }} interval={14} />
@@ -1728,30 +1754,30 @@ export default function StockAnalysisTool() {
                   {sentiment ? (
                     sentiment.ok ? (
                       <>
-                        <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-                          <div style={{ flex: 1, background: T.green + "15", border: `1px solid ${T.green}33`, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
-                            <div style={{ fontSize: 24, fontWeight: 800, color: T.green }}>{sentiment.bullPct}%</div>
+                        <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+                          <div style={{ flex: "1 1 80px", background: T.green + "15", border: `1px solid ${T.green}33`, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
+                            <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, color: T.green }}>{sentiment.bullPct}%</div>
                             <div style={{ fontSize: 11, color: T.muted }}>Bullish ({sentiment.bullish}帖)</div>
                           </div>
-                          <div style={{ flex: 1, background: T.red + "15", border: `1px solid ${T.red}33`, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
-                            <div style={{ fontSize: 24, fontWeight: 800, color: T.red }}>{sentiment.bearPct}%</div>
+                          <div style={{ flex: "1 1 80px", background: T.red + "15", border: `1px solid ${T.red}33`, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
+                            <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, color: T.red }}>{sentiment.bearPct}%</div>
                             <div style={{ fontSize: 11, color: T.muted }}>Bearish ({sentiment.bearish}帖)</div>
                           </div>
-                          <div style={{ flex: 1, background: T.blue + "15", border: `1px solid ${T.blue}33`, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
-                            <div style={{ fontSize: 24, fontWeight: 800, color: T.blue }}>{sentiment.count}</div>
+                          <div style={{ flex: "1 1 80px", background: T.blue + "15", border: `1px solid ${T.blue}33`, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
+                            <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, color: T.blue }}>{sentiment.count}</div>
                             <div style={{ fontSize: 11, color: T.muted }}>总帖子</div>
                           </div>
                         </div>
-                        <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
-                          <div style={{ background: T.cardAlt, padding: "8px 12px", borderRadius: 8, flex: 1 }}>
+                        <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+                          <div style={{ background: T.cardAlt, padding: "8px 12px", borderRadius: 8, flex: "1 1 80px" }}>
                             <div style={{ fontSize: 11, color: T.muted }}>情绪方向</div>
                             <div style={{ fontSize: 16, fontWeight: 700, color: sentiment.direction === "偏多" ? T.green : sentiment.direction === "偏空" ? T.red : T.yellow }}>{sentiment.direction}</div>
                           </div>
-                          <div style={{ background: T.cardAlt, padding: "8px 12px", borderRadius: 8, flex: 1 }}>
+                          <div style={{ background: T.cardAlt, padding: "8px 12px", borderRadius: 8, flex: "1 1 80px" }}>
                             <div style={{ fontSize: 11, color: T.muted }}>讨论热度</div>
                             <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{sentiment.crowdedness}</div>
                           </div>
-                          <div style={{ background: T.cardAlt, padding: "8px 12px", borderRadius: 8, flex: 1 }}>
+                          <div style={{ background: T.cardAlt, padding: "8px 12px", borderRadius: 8, flex: "1 1 80px" }}>
                             <div style={{ fontSize: 11, color: T.muted }}>Watchlist</div>
                             <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{sentiment.watchlist || "-"}</div>
                           </div>
