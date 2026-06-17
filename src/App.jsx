@@ -198,9 +198,9 @@ const mergeLiveWithPreset = (ticker, prof) => {
   const high52 = rangeParts.length === 2 && rangeParts[1] > 0 ? rangeParts[1] : price * 1.3;
   const low52 = rangeParts.length === 2 && rangeParts[0] > 0 ? rangeParts[0] : price * 0.7;
 
-  // YTD estimate from change data
+  // YTD — will be computed from real history in doAnalyze; null means unknown
   const chgPct = safeNum(p.changePercentage, 0);
-  const ytd = chgPct * 3; // rough estimate since we don't have year start price
+  const ytd = null;
 
   // Volatility estimate from beta
   const vol = (safeNum(p.beta, 1.0) * 0.018);
@@ -235,7 +235,7 @@ const mergeLiveWithPreset = (ticker, prof) => {
 
   return {
     name: p.companyName || preset?.name || ticker, market, price, cur,
-    high52, low52, ytd: +ytd.toFixed(1), vol, fin,
+    high52, low52, ytd, vol, fin,
     prices: null, // Will use genPrices in runAnalysis
     peers: preset?.peers || [{ n: "行业均值", pe: 25, pb: 5 }, { n: "同行A", pe: 20, pb: 4 }, { n: "行业均值", pe: 25, pb: 5 }],
     risks: risks.slice(0, 3), bulls: bulls.slice(0, 3), verdict,
@@ -548,8 +548,56 @@ function runAnalysis(ticker, stockData, dataSource) {
   const expectedValue = scenarios.reduce((s, sc) => s + sc.prob * sc.target, 0);
   const expectedReturn = +((expectedValue - curPrice) / curPrice * 100).toFixed(1);
 
+  // Dynamic composite score from fundamentals + technicals
+  const compositeScore = (() => {
+    let s = 50; // base
+    if (fundScore != null) {
+      const fundDelta = fundScore - 50; // -50..+50
+      s += fundDelta * 0.45; // fundamentals weight 45%
+    }
+    const techDelta = techScore - 50;
+    s += techDelta * 0.40; // technicals weight 40%
+    // Sentiment weight 15%
+    const sentBuzz = p.sent?.buzz ?? 50;
+    s += (sentBuzz - 50) * 0.15;
+    return Math.round(Math.min(100, Math.max(0, s)));
+  })();
+
+  // Rating thresholds — prefer dynamic score, fallback to preset only if no live data
+  const preset = PRESETS[ticker];
+  const scoreToRating = (sc) => sc >= 70 ? "买入" : sc >= 55 ? "持有" : sc >= 40 ? "观望" : "回避";
+  const scoreToSub = (sc) => sc >= 70 ? "Accumulate" : sc >= 55 ? "Hold" : sc >= 40 ? "Neutral" : "Avoid";
+  const usePreset = preset && dataSource !== "live";
+  const finalScore = dataSource === "live" ? compositeScore : (preset?.score ?? compositeScore);
+  const rating = usePreset ? (preset?.rating || scoreToRating(finalScore)) : scoreToRating(finalScore);
+  const sub = usePreset ? (preset?.sub || scoreToSub(finalScore)) : scoreToSub(finalScore);
+
+  // Generate dynamic verdict based on actual data
+  const verdict = (() => {
+    if (usePreset && preset?.verdict) return preset.verdict;
+    const parts = [];
+    const companyName = p.companyName || ticker;
+    parts.push(`${companyName} 当前价 ${cur}${price.toFixed(2)}`);
+    if (high52 && price > 0) {
+      const distHigh = ((price - high52) / high52 * 100).toFixed(0);
+      parts.push(`距52周高点 ${distHigh}%`);
+    }
+    if (fundScore != null) {
+      if (fundScore >= 70) parts.push("基本面优秀");
+      else if (fundScore >= 55) parts.push("基本面良好");
+      else if (fundScore >= 40) parts.push("基本面一般");
+      else parts.push("基本面偏弱");
+    }
+    if (techScore >= 65) parts.push("技术面偏多");
+    else if (techScore <= 35) parts.push("技术面偏空");
+    else parts.push("技术面中性");
+    parts.push(finalScore >= 70 ? "建议分批建仓" : finalScore >= 55 ? "可持有观望" : finalScore >= 40 ? "建议观望等待更好时机" : "建议暂时回避");
+    return parts.join("，") + "。";
+  })();
+
   return {
     ticker, ...p, high52, low52, prices, chartData, closes, dataSource,
+    score: finalScore, rating, sub, verdict,
     tech: { sma20: curSMA20, sma50: curSMA50, sma200: curSMA200, ema10: ema10[ema10.length - 1], rsi: curRSI, macd: curMACD, signal: curSignal, hist: macdHist, atr: curATR, atrPct, avgVol, signals, priceVs52h, priceVsSMA200,
       boll: { mid: bollMid, upper: bollUpper, lower: bollLower },
       vwma,
@@ -805,6 +853,20 @@ export default function StockAnalysisTool() {
       }
 
       analysis = { ...analysis, fin: updatedFin, finSource: "live", fundScore: liveFundScore };
+
+      // Recalculate composite score with real financials
+      {
+        const fs = liveFundScore, ts = analysis.techScore || analysis.fundScore || 50;
+        const sentBuzz = analysis.sent?.buzz ?? 50;
+        let comp = 50;
+        if (fs != null) comp += (fs - 50) * 0.45;
+        comp += ((analysis.techScore ?? 50) - 50) * 0.40;
+        comp += (sentBuzz - 50) * 0.15;
+        const newScore = Math.round(Math.min(100, Math.max(0, comp)));
+        const newRating = newScore >= 70 ? "买入" : newScore >= 55 ? "持有" : newScore >= 40 ? "观望" : "回避";
+        const newSub = newScore >= 70 ? "Accumulate" : newScore >= 55 ? "Hold" : newScore >= 40 ? "Neutral" : "Avoid";
+        analysis = { ...analysis, score: newScore, rating: newRating, sub: newSub };
+      }
       setResult(analysis);
       status.push({ name: "财务报表", ok: true, level: fin.quarters?.length >= 4 ? "complete" : fin.eps > 0 ? "degraded" : "degraded", note: `PE ${realPE}x, 营收 ${fmt(fin.revenue)}, EPS $${fin.eps.toFixed(2)}${fin.operatingCF ? ", OCF " + fmt(fin.operatingCF) : ""}${fin.cash ? ", 现金 " + fmt(fin.cash) : ""}${fin.quarters?.length < 4 ? " (季报数据不完整)" : ""}` });
       if (fin.analystTarget?.avgTarget) {
@@ -964,7 +1026,7 @@ export default function StockAnalysisTool() {
                       {result.liveData.change > 0 ? "+" : ""}{result.liveData.change?.toFixed(2)} ({result.liveData.chgPct?.toFixed(2)}%)
                     </span>
                   )}
-                  <span style={{ fontSize: 14, color: result.ytd < 0 ? T.red : T.green, fontWeight: 600 }}>YTD {pct(result.ytd)}</span>
+                  {result.ytd != null && <span style={{ fontSize: 14, color: result.ytd < 0 ? T.red : T.green, fontWeight: 600 }}>YTD {pct(result.ytd)}</span>}
                   <span style={{ fontSize: 12, color: T.dim }}>52周高 {result.cur}{result.high52?.toFixed(1)} ({pct(result.tech.priceVs52h)})</span>
                 </div>
                 {result.dataSource === "live" && result.liveData && (
@@ -1860,7 +1922,7 @@ export default function StockAnalysisTool() {
                   </div>
                 </div>
                 <div style={{ fontSize: 12, color: T.muted, marginTop: 6 }}>
-                  {new Date().toISOString().slice(0, 10)} · {result.cur}{result.price?.toFixed(2)} {result.dataSource === "live" ? "(实时)" : "(演示)"} · 距52周高 {pct(result.tech.priceVs52h)} · YTD {pct(result.ytd)}
+                  {new Date().toISOString().slice(0, 10)} · {result.cur}{result.price?.toFixed(2)} {result.dataSource === "live" ? "(实时)" : "(演示)"} · 距52周高 {pct(result.tech.priceVs52h)}{result.ytd != null ? ` · YTD ${pct(result.ytd)}` : ""}
                 </div>
               </div>
 

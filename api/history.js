@@ -11,18 +11,26 @@ export default async function handler(req, res) {
     const raw = await r.text();
 
     // Check for premium/error responses
-    if (raw.startsWith("Premium") || raw.startsWith("{")) {
+    // Valid data: JSON array [{...}, ...] → starts with "["
+    // Invalid symbol: [] → handled by length check
+    // Premium symbol: "Premium Query Parameter: ..." → plain text
+    // API error: {"Error Message": "..."} → JSON object starts with "{"
+    if (raw.startsWith("Premium")) {
       return res.status(200).json({ ok: false, error: raw.slice(0, 200) });
     }
 
     const data = JSON.parse(raw);
-    if (!Array.isArray(data) || data.length === 0) {
-      return res.status(200).json({ ok: false, error: "No historical data" });
+
+    // Handle wrapped responses (e.g., {"historical": [...]}) or error objects
+    const bars = Array.isArray(data) ? data : (data?.historical || []);
+
+    if (!Array.isArray(bars) || bars.length === 0) {
+      return res.status(200).json({ ok: false, error: data?.["Error Message"] || "No historical data" });
     }
 
     // Data comes newest-first, reverse to oldest-first for charting
     // Keep last 300 trading days (enough for SMA200 + buffer + chart)
-    const trimmed = data.slice(0, 300).reverse();
+    const trimmed = bars.slice(0, 300).reverse();
 
     // Find year-start price for YTD calculation
     const now = new Date();
@@ -37,7 +45,7 @@ export default async function handler(req, res) {
     }
     // If not in trimmed data, check full dataset
     if (!yearStartPrice) {
-      for (const bar of data) {
+      for (const bar of bars) {
         if (bar.date >= yearStart) {
           yearStartPrice = bar.close;
           break;
@@ -46,7 +54,7 @@ export default async function handler(req, res) {
     }
 
     // Compact format: only fields we need
-    const bars = trimmed.map(d => ({
+    const compactBars = trimmed.map(d => ({
       date: d.date,
       open: d.open,
       high: d.high,
@@ -59,8 +67,8 @@ export default async function handler(req, res) {
     res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=600");
     res.status(200).json({
       ok: true,
-      count: bars.length,
-      bars,
+      count: compactBars.length,
+      bars: compactBars,
       yearStartPrice,
       source: "FMP historical-price-eod/full",
     });
