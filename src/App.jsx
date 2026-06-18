@@ -548,7 +548,7 @@ function runAnalysis(ticker, stockData, dataSource) {
     if (usePreset && preset?.verdict) return preset.verdict;
     const parts = [];
     const companyName = p.companyName || ticker;
-    parts.push(`${companyName} 当前价 ${cur}${price.toFixed(2)}`);
+    parts.push(`${companyName} 当前价 ${p.cur}${price.toFixed(2)}`);
     if (high52 && price > 0) {
       const distHigh = ((price - high52) / high52 * 100).toFixed(0);
       parts.push(`距52周高点 ${distHigh}%`);
