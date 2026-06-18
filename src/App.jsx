@@ -1034,13 +1034,60 @@ export default function StockAnalysisTool() {
                 )}
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>最终评级</div>
+                <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>最终评级 <span style={{ fontSize: 10, color: T.dim }}>（基本面45%+技术40%+情绪15%）</span></div>
                 <div style={{ fontSize: 22, fontWeight: 800, color: result.score >= 65 ? T.green : result.score >= 45 ? T.yellow : T.red }}>{result.rating}</div>
                 <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{result.sub}</div>
                 <div style={{ marginTop: 8 }}><ScoreGauge score={result.score} label="综合评分" size={80} /></div>
+                <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
+                  基本面 {result.fundScore != null ? result.fundScore : "N/A"} · 技术面 {result.techScore} · 情绪 {result.sent?.buzz ?? 50}
+                </div>
               </div>
             </div>
           </Card>
+
+          {/* RATING METHODOLOGY */}
+          <details style={{ marginBottom: 12, background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 14px" }}>
+            <summary style={{ cursor: "pointer", fontSize: 12, color: T.muted, userSelect: "none", listStyle: "none" }}>
+              <span style={{ marginRight: 4 }}>&#x2139;&#xFE0F;</span> 评分与评级方法 <span style={{ fontSize: 10, color: T.dim }}>（点击展开）</span>
+            </summary>
+            <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.9, marginTop: 10 }}>
+              <div style={{ marginBottom: 8 }}>
+                <b style={{ color: T.text }}>综合评分（0-100）</b> = 基本面 × 45% + 技术面 × 40% + 情绪 × 15%，以50为中枢上下浮动。
+              </div>
+              <div style={{ display: "flex", gap: mob ? 8 : 20, flexWrap: "wrap", marginBottom: 10 }}>
+                <div style={{ flex: "1 1 180px", background: T.cardAlt, padding: "8px 12px", borderRadius: 6 }}>
+                  <b style={{ color: T.blue }}>基本面（45%）</b><br />
+                  <span style={{ color: T.dim }}>FwdPE &lt;20 +15 / &lt;30 +5 / ≥30 -10<br />
+                  营收增速 &gt;30% +15 / &gt;10% +8 / 否则 -5<br />
+                  净利润增速 &gt;30% +10 / &gt;0 +5 / 否则 -10<br />
+                  ROE &gt;25% +10 / &gt;15% +5<br />
+                  毛利率 &gt;50% +5</span>
+                </div>
+                <div style={{ flex: "1 1 180px", background: T.cardAlt, padding: "8px 12px", borderRadius: 6 }}>
+                  <b style={{ color: T.purple }}>技术面（40%）</b><br />
+                  <span style={{ color: T.dim }}>RSI 50-70 +10 / &gt;70超买 -5 / &lt;30超卖 +10<br />
+                  MACD金叉 +15 / 死叉 -10<br />
+                  价格 &gt; SMA20 +10 / 否则 -5<br />
+                  价格 &gt; SMA50 +10 / 否则 -5</span>
+                </div>
+                <div style={{ flex: "1 1 140px", background: T.cardAlt, padding: "8px 12px", borderRadius: 6 }}>
+                  <b style={{ color: T.orange }}>情绪（15%）</b><br />
+                  <span style={{ color: T.dim }}>StockTwits 看多比例<br />
+                  &gt;60% 偏多 / &lt;40% 偏空<br />
+                  数据不足时取中性50</span>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
+                <span><b style={{ color: T.green }}>≥70 买入</b> (Accumulate)</span>
+                <span><b style={{ color: T.yellow }}>55-69 持有</b> (Hold)</span>
+                <span><b style={{ color: T.orange }}>40-54 观望</b> (Neutral)</span>
+                <span><b style={{ color: T.red }}>&lt;40 回避</b> (Avoid)</span>
+              </div>
+              <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
+                ⚠ 评分仅为量化辅助参考，不构成投资建议。基本面数据缺失时基本面权重归零，评分仅基于技术面+情绪。
+              </div>
+            </div>
+          </details>
 
           {/* TABS */}
           <div className={mob ? "sa-tab-scroll" : ""} style={{ display: "flex", gap: 4, marginBottom: 16, background: T.card, padding: 4, borderRadius: 10, flexWrap: "wrap" }}>
