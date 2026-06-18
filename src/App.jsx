@@ -712,7 +712,7 @@ export default function StockAnalysisTool() {
     }
 
     let analysis = runAnalysis(t, stockData, dataSource);
-    setResult(analysis);
+    // Don't setResult here — wait for parallel fetch to complete so badge doesn't flash
 
     // 4. Fetch external data (sentiment, macro, news, financials, history) in parallel
     status.push({ name: "FMP 行情", ok: dataSource === "live", level: dataSource === "live" ? "complete" : "degraded", note: dataSource === "live" ? "实时价格/52周/市值" : "预设数据(可能过时)" });
@@ -744,7 +744,7 @@ export default function StockAnalysisTool() {
       status.push({ name: "历史K线", ok: false, level: "missing", note: hist.error ? hist.error : "该股票历史数据不可用" });
       status.push({ name: "技术指标", ok: false, level: "missing", note: "⚠ 基于模拟K线，仅供趋势参考" });
     }
-    setResult(analysis);
+    // Don't setResult here yet — wait for financials merge to avoid badge flash
 
     setSentiment(sent);
     // Patch analysis with real sentiment buzz (replace preset value) for radar chart & composite score
@@ -759,7 +759,6 @@ export default function StockAnalysisTool() {
         analysis = { ...analysis, score: newScore, rating: newRating, sub: newSub };
       }
     }
-    setResult(analysis); // ensure sentiment-patched analysis is reflected
     status.push({ name: "社交情绪", ok: sent.ok, level: sent.ok ? (sent.count > 25 ? "complete" : sent.count > 10 ? "degraded" : "degraded") : "missing", note: sent.ok ? `StockTwits ${sent.count}帖, Bullish ${sent.bullPct}%${sent.count <= 10 ? " (样本偏少)" : ""}` : sent.error });
 
     setMacro(mac);
@@ -843,8 +842,7 @@ export default function StockAnalysisTool() {
         const newSub = scoreToSub(newScore);
         analysis = { ...analysis, score: newScore, rating: newRating, sub: newSub };
       }
-      setResult(analysis);
-      status.push({ name: "财务报表", ok: true, level: fin.quarters?.length >= 4 ? "complete" : fin.eps > 0 ? "degraded" : "degraded", note: `PE ${realPE}x, 营收 ${fmt(fin.revenue)}, EPS ${analysis.cur}${fin.eps.toFixed(2)}${fin.operatingCF ? ", OCF " + fmt(fin.operatingCF) : ""}${fin.cash ? ", 现金 " + fmt(fin.cash) : ""}${fin.quarters?.length < 4 ? " (季报数据不完整)" : ""}` });
+      status.push({ name: "财务报表", ok: true, level: fin.quarters?.length >= 4 ? "complete" : fin.eps > 0 ? "degraded" : "degraded", note: `PE ${realPE != null ? realPE + "x" : "N/A(亏损)"}, 营收 ${fmt(fin.revenue)}, EPS ${analysis.cur}${fin.eps.toFixed(2)}${fin.operatingCF ? ", OCF " + fmt(fin.operatingCF) : ""}${fin.cash ? ", 现金 " + fmt(fin.cash) : ""}${fin.quarters?.length < 4 ? " (季报数据不完整)" : ""}` });
       if (fin.analystTarget?.avgTarget) {
         status.push({ name: "分析师预测", ok: true, level: fin.analystTarget.count >= 5 ? "complete" : "degraded", note: `${fin.analystTarget.count}位分析师, 均价 ${analysis.cur}${fin.analystTarget.avgTarget.toFixed(1)}${fin.analystTarget.count < 5 ? " (覆盖较少)" : ""}` });
       } else {
@@ -857,6 +855,7 @@ export default function StockAnalysisTool() {
       status.push({ name: "分析师预测", ok: false, level: "missing", note: "需FMP付费套餐" });
     }
 
+    setResult(analysis); // Single setResult after all data is merged — prevents badge flashing
     setDataStatus(status);
     } catch (err) {
       console.error("[StockAnalyzer] 分析异常:", err);
@@ -1051,7 +1050,7 @@ export default function StockAnalysisTool() {
           {/* ═══ OVERVIEW ═══ */}
           <div style={{ display: tab === "overview" ? "block" : "none" }}>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-                <MetricCard label="Forward PE" value={result.fin.fwdPE != null ? result.fin.fwdPE + "x" : "N/A"} sub={`行业 ${result.peers[2]?.pe || "-"}x`} color={result.fin.fwdPE != null && result.fin.fwdPE < 25 ? T.green : result.fin.fwdPE != null ? T.yellow : T.dim} highlight={T.blue} />
+                <MetricCard label="Forward PE" value={result.fin.fwdPE != null ? result.fin.fwdPE + "x" : "N/A"} sub={result.fin.fwdPE != null ? `行业 ${result.peers[2]?.pe || "-"}x` : "前瞻EPS仍为负，无法计算"} color={result.fin.fwdPE != null && result.fin.fwdPE < 25 ? T.green : result.fin.fwdPE != null ? T.yellow : T.dim} highlight={T.blue} />
                 <MetricCard label="营收增速" value={result.fin.revG ? pct(result.fin.revG) : "N/A"} sub={`净利润 ${result.fin.niG ? pct(result.fin.niG) : "N/A"}`} color={result.fin.revG > 20 ? T.green : result.fin.revG > 0 ? T.yellow : result.fin.revG ? T.red : T.dim} highlight={T.green} />
                 <MetricCard label="RSI (14)" value={result.tech.rsi.toFixed(1)} sub={result.tech.rsi > 55 ? "偏多动能" : result.tech.rsi < 45 ? "偏弱" : "中性区间"} color={result.tech.rsi > 70 ? T.red : result.tech.rsi > 55 ? T.green : T.yellow} highlight={T.purple} />
                 <MetricCard label="MACD" value={result.tech.macd > result.tech.signal ? "金叉" : "死叉"} sub={`柱状 ${result.tech.hist > 0 ? "+" : ""}${result.tech.hist.toFixed(3)}`} color={result.tech.macd > result.tech.signal ? T.green : T.red} highlight={T.orange} />
@@ -1219,8 +1218,8 @@ export default function StockAnalysisTool() {
                   <SectionTitle icon="&#x1F4B0;">估值指标 {result.finSource === "live" ? <Badge text="实时数据" color={T.green} /> : result.fin?.finAvailable === "preset" ? <Badge text="预设参考值" color={T.yellow} /> : <Badge text="数据不可用" color={T.red} />}</SectionTitle>
                   <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 10 }}>
                     {[
-                      { l: "PE (TTM)", v: result.fin.pe != null ? result.fin.pe + "x" : "N/A" },
-                      { l: "Forward PE", v: result.fin.fwdPE != null ? result.fin.fwdPE + "x" : "N/A", hl: T.blue },
+                      { l: "PE (TTM)", v: result.fin.pe != null ? result.fin.pe + "x" : "N/A", sub: result.fin.pe == null && result.finSource === "live" ? "公司当前亏损" : null },
+                      { l: "Forward PE", v: result.fin.fwdPE != null ? result.fin.fwdPE + "x" : "N/A", hl: T.blue, sub: result.fin.fwdPE == null && result.finSource === "live" ? "前瞻EPS仍为负" : null },
                       { l: "PB", v: result.fin.pb != null ? result.fin.pb + "x" : "N/A" },
                       { l: "股息率", v: result.fin.divY.toFixed(2) + "%" },
                       { l: "ROE", v: result.fin.roe != null ? result.fin.roe.toFixed(1) + "%" : "N/A" },
@@ -1229,6 +1228,7 @@ export default function StockAnalysisTool() {
                       <div key={i} style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8, borderLeft: m.hl ? `3px solid ${m.hl}` : "none" }}>
                         <div style={{ fontSize: 11, color: T.muted }}>{m.l}</div>
                         <div style={{ fontSize: 18, fontWeight: 700, color: T.text }}>{m.v}</div>
+                        {m.sub && <div style={{ fontSize: 10, color: T.dim, marginTop: 2 }}>{m.sub}</div>}
                       </div>
                     ))}
                   </div>
