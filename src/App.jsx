@@ -792,7 +792,10 @@ export default function StockAnalysisTool() {
       const realPE = fin.eps > 0 ? +(analysis.price / fin.eps).toFixed(1) : null;
       const fwdEPS = fin.eps * (1 + (fin.epsGrowth || 0) / 100);
       const realFwdPE = fwdEPS > 0 ? +(analysis.price / fwdEPS).toFixed(1) : null;
-      const bookValuePS = (fin.roe > 0 && fin.eps > 0) ? (fin.eps / (fin.roe / 100)) : 0;
+      // PB: prefer direct balance-sheet calculation; fall back to ROE-derived
+      const bookValuePS = (fin.totalEquity && fin.shares && fin.shares > 0)
+        ? fin.totalEquity / fin.shares
+        : ((fin.roe > 0 && fin.eps > 0) ? (fin.eps / (fin.roe / 100)) : 0);
       const realPB = bookValuePS > 0 ? +(analysis.price / bookValuePS).toFixed(1) : 0;
 
       // Override fin data in analysis result — use real balance sheet / cash flow where available
