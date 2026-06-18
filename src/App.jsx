@@ -162,7 +162,6 @@ const fetchHistory = async (symbol) => {
   try {
     const r = await fetch(`/api/history?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(20000) });
     return await safeJson(r);
-    return d; // { ok: true, bars: [...], yearStartPrice, count } or { ok: false, error }
   } catch (e) { return { ok: false, error: e.message, bars: [], yearStartPrice: null }; }
 };
 
@@ -676,6 +675,7 @@ export default function StockAnalysisTool() {
     setLoading(true); setError(""); setActiveTicker(t); setTab("overview");
     setSentiment(null); setMacro(null); setNews(null); setFinData(null); setDataStatus([]); setEvents(null);
 
+    try {
     let stockData = null, dataSource = "demo";
     const status = [];
 
@@ -841,7 +841,13 @@ export default function StockAnalysisTool() {
     }
 
     setDataStatus(status);
-    setLoading(false);
+    } catch (err) {
+      console.error("[StockAnalyzer] 分析异常:", err);
+      setError(`分析过程出错: ${err.message || "未知错误"}。请重试或换一个股票。`);
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   const doSearch = () => doAnalyze(input);
