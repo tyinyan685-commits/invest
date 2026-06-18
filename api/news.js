@@ -4,6 +4,7 @@ export default async function handler(req, res) {
   const { q } = req.query;
   if (!q) return res.status(400).json({ ok: false, error: "Missing q param" });
   if (q.length > 100) return res.status(400).json({ ok: false, error: "Query too long" });
+  if (!NEWSAPI_KEY) return res.status(200).json({ ok: false, error: "NEWSAPI_KEY 未配置", articles: [], total: 0 });
   try {
     const r = await fetch(
       `https://newsapi.org/v2/everything?q=${encodeURIComponent(q)}&sortBy=publishedAt&pageSize=10&language=en&apiKey=${NEWSAPI_KEY}`,

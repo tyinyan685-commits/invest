@@ -1,6 +1,7 @@
 import { FRED_KEY, FRED_BASE, setCORS } from "./_lib.js";
 
 export default async function handler(req, res) {
+  if (!FRED_KEY) return res.status(200).json({ ok: false, error: "FRED_API_KEY 未配置", yield10y: "N/A", fedFunds: "N/A" });
   try {
     const [r10y, rFF] = await Promise.all([
       fetch(`${FRED_BASE}/series/observations?series_id=DGS10&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=5`, { signal: AbortSignal.timeout(10000) }),
