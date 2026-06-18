@@ -4,6 +4,7 @@ export default async function handler(req, res) {
   const { symbol } = req.query;
   const err = validateSymbol(symbol);
   if (err) return res.status(400).json({ ok: false, error: err });
+  if (!FMP_KEY) return res.status(200).json({ ok: false, error: "FMP_API_KEY 未配置" });
   const s = encodeURIComponent(symbol);
   const opt = { signal: AbortSignal.timeout(12000) };
   try {

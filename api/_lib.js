@@ -1,7 +1,7 @@
 // Shared configuration and helpers for Vercel serverless functions
-// All API keys should eventually be moved to process.env (Vercel environment variables)
+// API keys are read from Vercel environment variables (Settings → Environment Variables)
 
-const FMP_KEY = process.env.FMP_API_KEY || "7TTaEnINif0Z5FJZgM6xvJibocPeHFPn";
+const FMP_KEY = process.env.FMP_API_KEY || "";
 const FRED_KEY = process.env.FRED_API_KEY || "07a98309feadf15506ac4004b1d66492";
 const NEWSAPI_KEY = process.env.NEWSAPI_KEY || "6150d75a436e482aa42d48e7d0c8a765";
 
