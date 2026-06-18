@@ -63,7 +63,7 @@ export default async function handler(req, res) {
 
     // Parallel: quarterly income (for earnings fallback) + key economic series
     const [qIncRes, cpiRes, ppiRes, unrateRes, payRes, fomcRes] = await Promise.all([
-      fetchJSON(`${FMP_BASE}/income-statement?symbol=${symbol}&apikey=${FMP_KEY}&limit=4&period=quarter`),
+      fetchJSON(`${FMP_BASE}/income-statement?symbol=${encodeURIComponent(symbol)}&apikey=${FMP_KEY}&limit=4&period=quarter`),
       fetchJSON(`${FRED_BASE}/series/observations?series_id=CPIAUCSL&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`),
       fetchJSON(`${FRED_BASE}/series/observations?series_id=PPIACO&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`),
       fetchJSON(`${FRED_BASE}/series/observations?series_id=UNRATE&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),

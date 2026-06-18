@@ -4,17 +4,18 @@ export default async function handler(req, res) {
   const { symbol } = req.query;
   const err = validateSymbol(symbol);
   if (err) return res.status(400).json({ ok: false, error: err });
+  const s = encodeURIComponent(symbol);
   const opt = { signal: AbortSignal.timeout(12000) };
   try {
     // Fetch 7 endpoints in parallel (income quarterly for QoQ trends, annual for growth rates)
     const [incRes, incAnnual, kmRes, fgRes, bsRes, cfRes, ptRes] = await Promise.all([
-      fetchJSONArray(`${FMP_BASE}/income-statement?symbol=${symbol}&apikey=${FMP_KEY}&limit=5&period=quarter`),
-      fetchJSONArray(`${FMP_BASE}/income-statement?symbol=${symbol}&apikey=${FMP_KEY}&limit=2`),
-      fetchJSONArray(`${FMP_BASE}/key-metrics?symbol=${symbol}&apikey=${FMP_KEY}&limit=1`),
-      fetchJSONArray(`${FMP_BASE}/financial-growth?symbol=${symbol}&apikey=${FMP_KEY}&limit=1`),
-      fetchJSONArray(`${FMP_BASE}/balance-sheet-statement?symbol=${symbol}&apikey=${FMP_KEY}&limit=1`),
-      fetchJSONArray(`${FMP_BASE}/cash-flow-statement?symbol=${symbol}&apikey=${FMP_KEY}&limit=1`),
-      fetchJSONArray(`${FMP_BASE}/price-target-summary?symbol=${symbol}&apikey=${FMP_KEY}`),
+      fetchJSONArray(`${FMP_BASE}/income-statement?symbol=${s}&apikey=${FMP_KEY}&limit=5&period=quarter`),
+      fetchJSONArray(`${FMP_BASE}/income-statement?symbol=${s}&apikey=${FMP_KEY}&limit=2`),
+      fetchJSONArray(`${FMP_BASE}/key-metrics?symbol=${s}&apikey=${FMP_KEY}&limit=1`),
+      fetchJSONArray(`${FMP_BASE}/financial-growth?symbol=${s}&apikey=${FMP_KEY}&limit=1`),
+      fetchJSONArray(`${FMP_BASE}/balance-sheet-statement?symbol=${s}&apikey=${FMP_KEY}&limit=1`),
+      fetchJSONArray(`${FMP_BASE}/cash-flow-statement?symbol=${s}&apikey=${FMP_KEY}&limit=1`),
+      fetchJSONArray(`${FMP_BASE}/price-target-summary?symbol=${s}&apikey=${FMP_KEY}`),
     ]);
 
     // Annual data for headline metrics (PE, revenue, growth rates)

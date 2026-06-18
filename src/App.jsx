@@ -747,6 +747,19 @@ export default function StockAnalysisTool() {
     setResult(analysis);
 
     setSentiment(sent);
+    // Patch analysis with real sentiment buzz (replace preset value) for radar chart & composite score
+    if (sent.ok && sent.bullPct != null) {
+      const realBuzz = Math.round(sent.bullPct);
+      analysis = { ...analysis, sent: { ...analysis.sent, buzz: realBuzz, reddit: null, stocktwits: realBuzz, trend: sent.strength ?? 50, rating: sent.direction ?? "中" }, sentSource: "live" };
+      // Recalculate composite score with real sentiment
+      {
+        const newScore = calcCompositeScore(analysis.fundScore, analysis.techScore ?? 50, realBuzz);
+        const newRating = scoreToRating(newScore);
+        const newSub = scoreToSub(newScore);
+        analysis = { ...analysis, score: newScore, rating: newRating, sub: newSub };
+      }
+    }
+    setResult(analysis); // ensure sentiment-patched analysis is reflected
     status.push({ name: "社交情绪", ok: sent.ok, level: sent.ok ? (sent.count > 25 ? "complete" : sent.count > 10 ? "degraded" : "degraded") : "missing", note: sent.ok ? `StockTwits ${sent.count}帖, Bullish ${sent.bullPct}%${sent.count <= 10 ? " (样本偏少)" : ""}` : sent.error });
 
     setMacro(mac);
@@ -795,9 +808,9 @@ export default function StockAnalysisTool() {
         nm: fin.netMargin,
         roe: fin.roe,
         epsGrowth: fin.epsGrowth ?? null,
-        // Real data from balance sheet / cash flow (fallback to estimate if not available)
-        ocf: fin.operatingCF ?? fin.revenue * 0.4,
-        cash: fin.cash ?? fin.netIncome * 0.7,
+        // Real data from balance sheet / cash flow (null if unavailable — never fabricate)
+        ocf: fin.operatingCF ?? null,
+        cash: fin.cash ?? null,
         // New fields from P1 — balance sheet & cash flow
         totalDebt: fin.totalDebt ?? null,
         netDebt: fin.netDebt ?? null,
@@ -880,7 +893,7 @@ export default function StockAnalysisTool() {
         <span style={{ fontSize: mob ? 18 : 22, fontWeight: 800, color: T.blue }}>StockAnalyzer</span>
         <span style={{ fontSize: 12, color: T.dim, background: T.card, padding: "2px 8px", borderRadius: 4 }}>v2.1</span>
         <span style={{ fontSize: 11, color: T.dim }}>多维度股票监测评估系统</span>
-        {result && <Badge text={result.dataSource === "live" ? (result.finSource === "live" ? "实时行情 + 实时财务" : result.finAvailable === "preset" ? "实时行情 + 预设财务(参考)" : "实时行情 · 财务数据不可用") : "演示数据"} color={result.dataSource === "live" ? (result.finSource === "live" ? T.green : T.yellow) : T.red} />}
+        {result && <Badge text={result.dataSource === "live" ? (result.finSource === "live" ? "实时行情 + 实时财务" : result.fin?.finAvailable === "preset" ? "实时行情 + 预设财务(参考)" : "实时行情 · 财务数据不可用") : "演示数据"} color={result.dataSource === "live" ? (result.finSource === "live" ? T.green : result.fin?.finAvailable === "preset" ? T.yellow : T.red) : T.red} />}
       </div>
 
       {/* API KEY SETTINGS */}
@@ -1199,7 +1212,7 @@ export default function StockAnalysisTool() {
               )}
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
                 <Card style={{ flex: "1 1 320px", minWidth: 280 }}>
-                  <SectionTitle icon="&#x1F4B0;">估值指标 {result.finSource === "live" ? <Badge text="实时数据" color={T.green} /> : result.finAvailable === "preset" ? <Badge text="预设参考值" color={T.yellow} /> : <Badge text="数据不可用" color={T.red} />}</SectionTitle>
+                  <SectionTitle icon="&#x1F4B0;">估值指标 {result.finSource === "live" ? <Badge text="实时数据" color={T.green} /> : result.fin?.finAvailable === "preset" ? <Badge text="预设参考值" color={T.yellow} /> : <Badge text="数据不可用" color={T.red} />}</SectionTitle>
                   <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 10 }}>
                     {[
                       { l: "PE (TTM)", v: result.fin.pe != null ? result.fin.pe + "x" : "N/A" },
@@ -1230,7 +1243,7 @@ export default function StockAnalysisTool() {
                   </div>
                 </Card>
                 <Card style={{ flex: "1 1 320px", minWidth: 280 }}>
-                  <SectionTitle icon="&#x1F4CA;">增长与盈利 {result.finSource === "live" ? <Badge text="实时" color={T.green} /> : result.finAvailable === "preset" ? <Badge text="参考值" color={T.yellow} /> : null}</SectionTitle>
+                  <SectionTitle icon="&#x1F4CA;">增长与盈利 {result.finSource === "live" ? <Badge text="实时" color={T.green} /> : result.fin?.finAvailable === "preset" ? <Badge text="参考值" color={T.yellow} /> : null}</SectionTitle>
                   <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 10 }}>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>营收</div>
@@ -1252,7 +1265,7 @@ export default function StockAnalysisTool() {
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>自由现金流 {result.finSource === "live" && result.fin.freeCashFlow ? <Badge text="实时" color={T.green} /> : ""}</div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: (result.fin.freeCashFlow || result.fin.ocf) > 0 ? T.green : T.red }}>{result.fin.freeCashFlow ? result.cur + fmt(result.fin.freeCashFlow) : (result.fin.ocf ? result.cur + fmt(result.fin.ocf * 0.7) : "N/A")}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: (result.fin.freeCashFlow) > 0 ? T.green : T.red }}>{result.fin.freeCashFlow ? result.cur + fmt(result.fin.freeCashFlow) : "N/A"}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>现金及等价物 {result.finSource === "live" && result.fin.cash ? <Badge text="实时" color={T.green} /> : ""}</div>
@@ -1380,7 +1393,7 @@ export default function StockAnalysisTool() {
                 </Card>
               )}
               <Card>
-                <SectionTitle icon="&#x1F50D;">可比公司估值对比</SectionTitle>
+                <SectionTitle icon="&#x1F50D;">可比公司估值对比 <span style={{ fontSize: 11, color: T.muted, fontWeight: 400 }}>{result.finSource === "live" ? "标的PE/PB为实时数据" : "预设参考值"}，可比公司为静态预设</span></SectionTitle>
                 <ResponsiveContainer width="100%" height={mob ? 170 : 220}>
                   <BarChart data={[{ n: result.ticker, pe: result.fin.fwdPE, pb: result.fin.pb }, ...result.peers.map(p => ({ ...p }))]} barGap={4}>
                     <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
@@ -1398,7 +1411,7 @@ export default function StockAnalysisTool() {
           {/* ═══ TECHNICAL ═══ */}
           <div style={{ display: tab === "technical" ? "block" : "none" }}>
               <Card style={{ marginBottom: 16 }}>
-                <SectionTitle icon="&#x1F4C8;">价格走势 & 均线系统 {result.dataSource === "live" && <Badge text="实时K线" color={T.green} />}</SectionTitle>
+                <SectionTitle icon="&#x1F4C8;">价格走势 & 均线系统 {result.tech.isRealHistory ? (result.dataSource === "live" && <Badge text={`${result.tech.historyLen}天真实K线`} color={T.green} />) : <Badge text="⚠ 模拟K线 (非真实行情)" color={T.red} />}</SectionTitle>
                 <ResponsiveContainer width="100%" height={mob ? 220 : 300}>
                   <LineChart data={result.chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
@@ -1512,7 +1525,7 @@ export default function StockAnalysisTool() {
           {/* ═══ POSITION ═══ */}
           <div style={{ display: tab === "position" ? "block" : "none" }}>
               <Card style={{ marginBottom: 16, background: `linear-gradient(135deg, ${T.card}, #1a2744)` }}>
-                <SectionTitle icon="&#x1F3AF;">仓位计划 (总目标 = 1.0 单位, 中等仓)</SectionTitle>
+                <SectionTitle icon="&#x1F3AF;">仓位计划 (总目标 = 1.0 单位, 中等仓) <span style={{ fontSize: 11, color: T.muted, fontWeight: 400 }}>基于技术指标自动生成，仅供参考</span></SectionTitle>
                 <div style={{ fontSize: 12, color: T.muted, marginBottom: 14 }}>ATR {result.tech.atrPct.toFixed(1)}% → {result.pos.overAlloc}</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {result.pos.entries.map((e, i) => {
@@ -1671,13 +1684,13 @@ export default function StockAnalysisTool() {
 
               {/* ═══ P3: SCENARIO STRESS TEST ═══ */}
               <Card style={{ marginTop: 16 }}>
-                <SectionTitle icon="&#x1F3AF;">三情景压力测试</SectionTitle>
+                <SectionTitle icon="&#x1F3AF;">三情景压力测试 <span style={{ fontSize: 11, color: T.muted, fontWeight: 400 }}>基于ATR波动率模型推算，非分析师预测</span></SectionTitle>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
                   {result.scenarios.items.map((sc, i) => (
                     <div key={i} style={{ flex: "1 1 180px", background: T.cardAlt, borderRadius: 10, padding: "14px 16px", borderTop: `3px solid ${sc.color}` }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                         <span style={{ fontSize: 14, fontWeight: 800, color: sc.color }}>{sc.name}</span>
-                        <Badge text={`${(sc.prob * 100).toFixed(0)}%概率`} color={sc.color} />
+                        <Badge text={`权重${(sc.prob * 100).toFixed(0)}%`} color={sc.color} />
                       </div>
                       <div style={{ fontSize: 24, fontWeight: 800, color: T.text, marginBottom: 4 }}>
                         {result.cur}{sc.target.toFixed(2)}
@@ -1692,7 +1705,7 @@ export default function StockAnalysisTool() {
 
                 {/* Expected Value */}
                 <div style={{ background: `linear-gradient(135deg, ${T.cardAlt}, #1a2744)`, borderRadius: 10, padding: "14px 16px", marginBottom: 14 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 10 }}>概率加权预期</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 10 }}>概率加权预期 <span style={{ fontSize: 10, color: T.dim }}>(模型估算，仅供参考)</span></div>
                   <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
                     <div style={{ flex: "1 1 120px" }}>
                       <div style={{ fontSize: 11, color: T.muted }}>预期价值</div>
