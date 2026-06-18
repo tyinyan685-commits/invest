@@ -786,12 +786,13 @@ export default function StockAnalysisTool() {
     status.push({ name: "新闻", ok: nws.ok, level: nws.ok ? (nws.total > 5 ? "complete" : "degraded") : "missing", note: nws.ok ? `${nws.total}条相关新闻` : nws.error });
 
     // 5. Merge real financials into analysis if available
-    if (fin.ok && fin.eps > 0 && analysis.price > 0) {
+    if (fin.ok && fin.eps != null && analysis.price > 0) {
       setFinData(fin);
-      const realPE = +(analysis.price / fin.eps).toFixed(1);
-      const fwdEPS = fin.eps * (1 + fin.epsGrowth / 100);
-      const realFwdPE = fwdEPS > 0 ? +(analysis.price / fwdEPS).toFixed(1) : realPE;
-      const bookValuePS = fin.roe > 0 ? (fin.eps / (fin.roe / 100)) : 0;
+      // PE is only meaningful when EPS > 0; null otherwise (display as N/A)
+      const realPE = fin.eps > 0 ? +(analysis.price / fin.eps).toFixed(1) : null;
+      const fwdEPS = fin.eps * (1 + (fin.epsGrowth || 0) / 100);
+      const realFwdPE = fwdEPS > 0 ? +(analysis.price / fwdEPS).toFixed(1) : null;
+      const bookValuePS = (fin.roe > 0 && fin.eps > 0) ? (fin.eps / (fin.roe / 100)) : 0;
       const realPB = bookValuePS > 0 ? +(analysis.price / bookValuePS).toFixed(1) : 0;
 
       // Override fin data in analysis result — use real balance sheet / cash flow where available
