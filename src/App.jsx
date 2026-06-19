@@ -1034,12 +1034,12 @@ export default function StockAnalysisTool() {
                 )}
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>最终评级 <span style={{ fontSize: 10, color: T.dim }}>（基本面45%+技术40%+情绪15%）</span></div>
+                <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>最终评级</div>
                 <div style={{ fontSize: 22, fontWeight: 800, color: result.score >= 65 ? T.green : result.score >= 45 ? T.yellow : T.red }}>{result.rating}</div>
                 <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{result.sub}</div>
                 <div style={{ marginTop: 8 }}><ScoreGauge score={result.score} label="综合评分" size={80} /></div>
                 <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
-                  基本面 {result.fundScore != null ? result.fundScore : "N/A"} · 技术面 {result.techScore} · 情绪 {result.sent?.buzz ?? 50}
+                  基本面 {result.fundScore != null ? result.fundScore : "N/A"}(×45%) · 技术面 {result.techScore}(×40%) · 情绪 {result.sent?.buzz ?? 50}(×15%)
                 </div>
               </div>
             </div>
