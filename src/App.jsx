@@ -1039,7 +1039,7 @@ export default function StockAnalysisTool() {
                 <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{result.sub}</div>
                 <div style={{ marginTop: 8 }}><ScoreGauge score={result.score} label="综合评分" size={80} /></div>
                 <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
-                  基本面 {result.fundScore != null ? result.fundScore : "N/A"}(×45%) · 技术面 {result.techScore}(×40%) · 情绪 {result.sent?.buzz ?? 50}(×15%)
+                  基本面 {result.fundScore != null ? result.fundScore + "分" : "N/A"}(权重45%) · 技术面 {result.techScore}分(40%) · 情绪 {result.sent?.buzz ?? 50}分(15%)
                 </div>
               </div>
             </div>
