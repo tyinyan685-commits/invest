@@ -752,7 +752,7 @@ export default function StockAnalysisTool() {
         analysis = { ...analysis, score: newScore, rating: newRating, sub: newSub };
       }
     }
-    status.push({ name: "社交情绪", ok: sent.ok && sent.labeledCount >= 10, level: sent.labeledCount >= 20 ? "complete" : sent.labeledCount >= 10 ? "degraded" : "missing", note: sent.ok ? `StockTwits ${sent.count}帖，其中 ${sent.labeledCount || 0} 条有方向标签；看多 ${sent.bullPct}%${sent.labeledCount < 10 ? "（有效样本不足，评级按中性50处理）" : ""}` : sent.error });
+    status.push({ name: "社交情绪", ok: sent.ok && sent.labeledCount >= 20, level: sent.labeledCount >= 30 ? "complete" : sent.labeledCount >= 20 ? "degraded" : "missing", note: sent.ok ? `StockTwits ${sent.count}帖，其中 ${sent.labeledCount || 0} 条有方向标签；看多 ${sent.bullPct}%${sent.labeledCount < 20 ? "（有效样本不足，评级按中性50处理）" : ""}` : sent.error });
 
     setMacro(mac);
     status.push({ name: "宏观数据", ok: mac.ok, level: mac.ok ? "complete" : "missing", note: mac.ok ? `10Y ${mac.yield10y}, FedFunds ${mac.fedFunds}` : mac.error });
@@ -871,6 +871,9 @@ export default function StockAnalysisTool() {
         ratingConfidenceLabel: unified.confidenceLabel,
         ratingModelVersion: unified.modelVersion
       };
+      if (unifiedRating.modelApplicability?.suitable === false) {
+        analysis = { ...analysis, modelApplicabilityWarning: unifiedRating.modelApplicability.reason };
+      }
       status.push({
         name: "统一评级",
         ok: unified.confidence >= 50,
@@ -1070,6 +1073,12 @@ export default function StockAnalysisTool() {
             </div>
           </Card>
 
+          {result.modelApplicabilityWarning && (
+            <div style={{ marginBottom: 12, padding: "10px 14px", border: `1px solid ${T.yellow}`, borderRadius: 8, color: T.yellow, background: T.yellow + "10", fontSize: 12, lineHeight: 1.6 }}>
+              <b>模型适用性有限：</b>{result.modelApplicabilityWarning} 页面保留原始数据供核对，但不应把分数直接解释为买卖等级。
+            </div>
+          )}
+
           {/* RATING METHODOLOGY */}
           <details style={{ marginBottom: 12, background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 14px" }}>
             <summary style={{ cursor: "pointer", fontSize: 12, color: T.muted, userSelect: "none", listStyle: "none" }}>
@@ -1099,7 +1108,7 @@ export default function StockAnalysisTool() {
                   <b style={{ color: T.orange }}>情绪（15%）</b><br />
                   <span style={{ color: T.dim }}>StockTwits 看多比例<br />
                   &gt;60% 偏多 / &lt;40% 偏空<br />
-                  数据不足时取中性50</span>
+                  有方向标签少于20条时取中性50</span>
                 </div>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>

@@ -162,7 +162,7 @@ function technicalScore(metrics) {
 function sentimentScore(sentiment) {
   const labeledCount = Number(sentiment?.labeledCount || 0);
   const bullPct = numberOrNull(sentiment?.bullPct);
-  const usable = labeledCount >= 10 && bullPct !== null;
+  const usable = labeledCount >= 20 && bullPct !== null;
   return {
     score: usable ? Math.round(clamp(bullPct)) : 50,
     available: usable ? 1 : 0,

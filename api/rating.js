@@ -20,6 +20,14 @@ function normalizeHistory(value) {
   return Array.isArray(value?.historical) ? value.historical : [];
 }
 
+function modelApplicability(profile) {
+  const classification = `${profile.sector || ""} ${profile.industry || ""}`;
+  const limited = /financial|bank|insurance|reit|real estate/i.test(classification);
+  return limited
+    ? { suitable: false, reason: "该行业的收入、毛利率和资本结构口径与普通经营型公司差异较大，通用评分不能直接用于买卖判断。" }
+    : { suitable: true, reason: null };
+}
+
 function nextAnalystEstimate(estimates, latestFiscalDate) {
   const cutoff = String(latestFiscalDate || "");
   const candidate = (Array.isArray(estimates) ? estimates : [])
@@ -112,7 +120,11 @@ export default async function handler(req, res) {
       grossMargin: ratioPercent(grossProfit, revenue),
       fiscalDate: latestIncome.date || null
     };
-    const rating = scoreRating({ fundamentals, technical, sentiment });
+    const applicability = modelApplicability(profile);
+    const calculatedRating = scoreRating({ fundamentals, technical, sentiment });
+    const rating = applicability.suitable
+      ? calculatedRating
+      : { ...calculatedRating, rating: "模型适用性有限", ratingEn: "Limited applicability" };
 
     setCORS(res);
     res.setHeader("Cache-Control", "public, s-maxage=1800, stale-while-revalidate=3600");
@@ -124,6 +136,7 @@ export default async function handler(req, res) {
       currency: profile.currency || null,
       generatedAt: new Date().toISOString(),
       rating,
+      modelApplicability: applicability,
       metrics: { fundamentals, technical, sentiment },
       sources: {
         marketAndFinancials: "Financial Modeling Prep",
