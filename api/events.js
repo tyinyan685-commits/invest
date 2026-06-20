@@ -13,9 +13,8 @@ export default async function handler(req, res) {
     calendarEnd.setDate(calendarEnd.getDate() + 60);
 
     // One FMP calendar request replaces up to 30 day-by-day Nasdaq requests.
-    const [earningsCalendar, qIncRes, cpiRes, ppiRes, unrateRes, payRes, fomcRes] = await Promise.all([
+    const [earningsCalendar, cpiRes, ppiRes, unrateRes, payRes, fomcRes] = await Promise.all([
       fetchJSON(`${FMP_BASE}/earnings-calendar?from=${fmtDate(today)}&to=${fmtDate(calendarEnd)}&apikey=${FMP_KEY}`),
-      fetchJSON(`${FMP_BASE}/income-statement?symbol=${encodeURIComponent(symbol)}&apikey=${FMP_KEY}&limit=4&period=quarter`),
       fetchJSON(`${FRED_BASE}/series/observations?series_id=CPIAUCSL&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`),
       fetchJSON(`${FRED_BASE}/series/observations?series_id=PPIACO&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`),
       fetchJSON(`${FRED_BASE}/series/observations?series_id=UNRATE&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
@@ -38,63 +37,9 @@ export default async function handler(req, res) {
         }
       : null;
 
-    // Fallback: estimate earnings from quarterly income pattern if the calendar has no match.
-    if (!earnings && Array.isArray(qIncRes) && qIncRes.length > 0) {
-      const latest = qIncRes[0];
-      const acceptedDate = latest.acceptedDate ? new Date(latest.acceptedDate.split(" ")[0]) : null;
-      const latestDate = acceptedDate || (latest.date ? new Date(latest.date) : null);
-      if (latestDate) {
-        const estNext = new Date(latestDate);
-        estNext.setDate(estNext.getDate() + 90);
-        if (estNext < today) estNext.setDate(estNext.getDate() + 90);
-        earnings = {
-          date: fmtDate(estNext),
-          estimated: true,
-          hour: "TBD",
-          lastQuarter: `${latest.period || ""} (${fmtDate(latestDate)})`,
-          lastRevenue: latest.revenue || null,
-          lastEps: latest.epsDiluted || latest.eps || null,
-          source: "estimated",
-        };
-      }
-    }
-
-    // --- 2. Build macro calendar from known schedules + FRED data ---
-    const fomcDates2026 = [
-      "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
-      "2026-07-29", "2026-09-16", "2026-11-04", "2026-12-16",
-    ];
-
+    // FRED provides observations, not an authoritative future release calendar.
+    // Keep this empty until dates are fetched from the official Fed/BLS calendars.
     const macroEvents = [];
-
-    for (const d of fomcDates2026) {
-      if (new Date(d) > today) {
-        macroEvents.push({ date: d, name: "FOMC \u5229\u7387\u51B3\u8BAE", icon: "\u{1F3E6}", impact: "\u6700\u9AD8", source: "Federal Reserve" });
-        break;
-      }
-    }
-
-    const nextCPI = new Date(today);
-    nextCPI.setDate(13);
-    if (nextCPI <= today) nextCPI.setMonth(nextCPI.getMonth() + 1);
-    macroEvents.push({ date: fmtDate(nextCPI), name: "CPI \u6570\u636E\u53D1\u5E03", icon: "\u{1F4CA}", impact: "\u9AD8", source: "BLS" });
-
-    const nextPPI = new Date(today);
-    nextPPI.setDate(15);
-    if (nextPPI <= today) nextPPI.setMonth(nextPPI.getMonth() + 1);
-    macroEvents.push({ date: fmtDate(nextPPI), name: "PPI \u6570\u636E\u53D1\u5E03", icon: "\u{1F4C8}", impact: "\u4E2D-\u9AD8", source: "BLS" });
-
-    const nextNFP = new Date(today);
-    nextNFP.setDate(1);
-    while (nextNFP.getDay() !== 5) nextNFP.setDate(nextNFP.getDate() + 1);
-    if (nextNFP <= today) {
-      nextNFP.setMonth(nextNFP.getMonth() + 1);
-      nextNFP.setDate(1);
-      while (nextNFP.getDay() !== 5) nextNFP.setDate(nextNFP.getDate() + 1);
-    }
-    macroEvents.push({ date: fmtDate(nextNFP), name: "\u975E\u519C\u5C31\u4E1A\u62A5\u544A", icon: "\u{1F477}", impact: "\u9AD8", source: "BLS" });
-
-    macroEvents.sort((a, b) => (a.date > b.date ? 1 : -1));
 
     // --- 3. Latest economic indicators with YoY ---
     const indicators = {};
@@ -141,6 +86,7 @@ export default async function handler(req, res) {
       earnings,
       macroEvents: macroEvents.slice(0, 8),
       indicators,
+      calendarPolicy: "未来宏观事件日期未接入官方日历时保持为空，不进行日期猜测。",
       generatedAt: fmtDate(today),
     });
   } catch (e) {

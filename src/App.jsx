@@ -94,27 +94,6 @@ const calcCompositeScore = (fundScore, techScore, sentBuzz = 50) => {
 const scoreToRating = (sc) => sc >= 70 ? "买入" : sc >= 55 ? "持有" : sc >= 40 ? "观望" : "回避";
 const scoreToSub = (sc) => sc >= 70 ? "Accumulate" : sc >= 55 ? "Hold" : sc >= 40 ? "Neutral" : "Avoid";
 
-// ═══════════════════ PRICE GENERATOR (DEMO) ═══════════════════
-// Seeded PRNG (mulberry32) — same ticker always produces same chart, avoids flicker
-const seedHash = (str) => { let h = 0; for (let i = 0; i < str.length; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0; return h >>> 0; };
-const mulberry32 = (seed) => { let s = seed; return () => { s = (s + 0x6D2B79F5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };
-const genPrices = (cur, days, vol, ticker = "") => {
-  const rng = mulberry32(seedHash(ticker || "DEFAULT"));
-  const data = []; let p = cur * (0.88 + rng() * 0.06);
-  for (let i = 0; i < days; i++) {
-    const trend = (i / days) * (cur - p) * 0.015;
-    const chg = trend + (rng() - 0.47) * p * vol;
-    const o = p, c = +(p + chg).toFixed(2);
-    const h = +(Math.max(o, c) + rng() * Math.abs(chg) * 0.5).toFixed(2);
-    const l = +(Math.min(o, c) - rng() * Math.abs(chg) * 0.5).toFixed(2);
-    const v = Math.floor(2e6 + rng() * 25e6);
-    data.push({ date: `D-${days - i}`, open: +o.toFixed(2), high: h, low: l, close: c, volume: v });
-    p = c;
-  }
-  data[data.length - 1].close = cur;
-  return data;
-};
-
 // ═══════════════════ EXTERNAL API SERVICES (via Vercel proxy) ═══════════════════
 // All external API calls go through serverless proxy to avoid CORS and protect API keys
 
@@ -127,7 +106,7 @@ const fetchSentiment = async (symbol) => {
   try {
     const r = await fetch(`/api/sentiment?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(12000) });
     return await safeJson(r);
-  } catch (e) { return { ok: false, error: e.message, count: 0, bullish: 0, bearish: 0, bullPct: 0, bearPct: 0, watchlist: 0, recentPosts: [], source: "StockTwits (失败)" }; }
+  } catch (e) { return { ok: false, error: e.message, count: 0, labeledCount: 0, bullish: 0, bearish: 0, bullPct: 50, bearPct: 50, watchlist: 0, recentPosts: [], source: "StockTwits (失败)" }; }
 };
 
 const fetchMacro = async () => {
@@ -137,9 +116,9 @@ const fetchMacro = async () => {
   } catch (e) { return { ok: false, yield10y: "N/A", fedFunds: "N/A", error: e.message, source: "FRED (失败)" }; }
 };
 
-const fetchNews = async (query) => {
+const fetchNews = async (symbol) => {
   try {
-    const r = await fetch(`/api/news?q=${encodeURIComponent(query)}`, { signal: AbortSignal.timeout(12000) });
+    const r = await fetch(`/api/news?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(12000) });
     return await safeJson(r);
   } catch (e) { return { ok: false, total: 0, articles: [], error: e.message, source: "NewsAPI (失败)" }; }
 };
@@ -195,57 +174,54 @@ const mergeLiveWithPreset = (ticker, prof) => {
   const p = prof;
   const cur = p.currency === "HKD" ? "HK$" : (p.currency === "CNY" ? "CN¥" : "$");
   const market = (p.exchange?.includes("HK") || p.exchangeFullName?.includes("Hong")) ? "HK" : "US";
-  const price = safeNum(p.price, 100);
+  const price = safeNum(p.price, null);
 
   // Parse 52-week range from profile ("140.1-339.8")
   const rangeParts = (p.range || "").split("-").map(Number);
-  const high52 = rangeParts.length === 2 && rangeParts[1] > 0 ? rangeParts[1] : price * 1.3;
-  const low52 = rangeParts.length === 2 && rangeParts[0] > 0 ? rangeParts[0] : price * 0.7;
+  const high52 = rangeParts.length === 2 && rangeParts[1] > 0 ? rangeParts[1] : null;
+  const low52 = rangeParts.length === 2 && rangeParts[0] > 0 ? rangeParts[0] : null;
 
   // YTD — will be computed from real history in doAnalyze; null means unknown
-  const chgPct = safeNum(p.changePercentage, 0);
+  const chgPct = safeNum(p.changePercentage, null);
   const ytd = null;
 
   // Volatility estimate from beta
-  const vol = (safeNum(p.beta, 1.0) * 0.018);
+  const vol = null;
 
   // Dividend yield
-  const divY = safeNum(p.lastDividend, 0) > 0 && price > 0 ? (safeNum(p.lastDividend) / price * 100) : 0;
+  const divY = safeNum(p.lastDividend, null) > 0 && price > 0 ? (safeNum(p.lastDividend) / price * 100) : null;
 
-  // Merge with preset if available
-  const preset = PRESETS[ticker];
-  const fin = preset ? { ...preset.fin, finAvailable: "preset" } : {
-    pe: null, fwdPE: null, pb: null, rev: 0, revG: 0, ni: 0, niG: 0,
-    cash: 0, ocf: 0, gm: null, nm: null, roe: null, overR: 0, divY: +divY.toFixed(2), da: 0,
+  const fin = {
+    pe: null, fwdPE: null, pb: null, rev: null, revG: null, ni: null, niG: null,
+    cash: null, ocf: null, gm: null, nm: null, roe: null, overR: null,
+    divY: divY === null ? null : +divY.toFixed(2), da: null,
     finAvailable: false,
   };
-  // Always override dividend yield with live data
-  fin.divY = +divY.toFixed(2);
 
-  const risks = preset?.risks || [
+  const risks = [
     { t: "市场波动风险", d: "市场整体波动可能影响个股表现", l: "低-中" },
     { t: "宏观环境不确定", d: "需关注宏观经济和行业政策变化", l: "中" },
     { t: "流动性风险", d: "成交量变化可能影响买卖时机", l: "低" },
   ];
-  const bulls = preset?.bulls || [
-    { t: "实时行情跟踪", d: `当前价 ${cur}${price}，52周区间 ${cur}${low52.toFixed(1)}-${cur}${high52.toFixed(1)}` },
+  const bulls = [
+    { t: "实时行情跟踪", d: `当前价 ${cur}${price}${high52 && low52 ? `，52周区间 ${cur}${low52.toFixed(1)}-${cur}${high52.toFixed(1)}` : ""}` },
     { t: "市值与行业", d: `${p.companyName || ticker}，${p.sector || ""} / ${p.industry || ""}` },
     { t: "基本面关注", d: `日均成交量 ${fmt(safeNum(p.averageVolume, 0))}，市场关注度${safeNum(p.averageVolume, 0) > 1e7 ? "较高" : "中等"}` },
   ];
-  const verdict = preset?.verdict || `${p.companyName || ticker} 当前价 ${cur}${price}，距52周高点 ${(((price - high52) / high52) * 100).toFixed(0)}%。建议结合基本面深入研究后再做投资决策。`;
-  const score = preset?.score || 50;
-  const rating = preset?.rating || scoreToRating(score);
-  const sub = preset?.sub || scoreToSub(score);
+  const verdict = `${p.companyName || ticker} 当前价 ${cur}${price}。结论仅在真实财务、历史行情和统一评级返回后生成。`;
+  const score = 50;
+  const rating = scoreToRating(score);
+  const sub = scoreToSub(score);
 
   return {
-    name: p.companyName || preset?.name || ticker, market, price, cur,
+    name: p.companyName || ticker, market, price, cur,
     high52, low52, ytd, vol, fin,
-    prices: null, // Will use genPrices in runAnalysis
-    peers: preset?.peers || [{ n: "行业均值", pe: 25, pb: 5 }, { n: "同行A", pe: 20, pb: 4 }, { n: "行业均值", pe: 25, pb: 5 }],
+    prices: null,
+    peers: [],
     risks: risks.slice(0, 3), bulls: bulls.slice(0, 3), verdict,
     rating, sub, score,
-    sent: preset?.sent || { reddit: 50, stocktwits: 45, trend: 50, buzz: 50, rating: "中" },
-    cat: preset?.cat || `${p.sector || ""} / ${p.industry || ""}`,
+    sent: { reddit: null, stocktwits: null, trend: null, buzz: 50, rating: "中性" },
+    cat: `${p.sector || ""} / ${p.industry || ""}`,
     liveData: { // extra live data from API for display
       volume: p.volume, avgVolume: p.averageVolume, marketCap: p.marketCap,
       beta: p.beta, change: p.change, chgPct, description: p.description,
@@ -253,8 +229,16 @@ const mergeLiveWithPreset = (ticker, prof) => {
   };
 };
 
-// ═══════════════════ PRESET STOCKS (DEMO FALLBACK) ═══════════════════
-const PRESETS = {
+const QUICK_PICKS = {
+  "9992.HK": "泡泡玛特",
+  AAPL: "Apple",
+  TSLA: "Tesla",
+  NVDA: "NVIDIA",
+  "0700.HK": "腾讯"
+};
+
+// Historical reference only. Production analysis never reads these values.
+const UNUSED_LEGACY_PRESETS_DO_NOT_USE = {
   "9992.HK": {
     name: "泡泡玛特 Pop Mart", market: "HK", price: 170.5, cur: "HK$",
     high52: 339.8, ytd: -10.6, vol: 0.035,
@@ -360,8 +344,9 @@ const PRESETS = {
 // ═══════════════════ ANALYSIS ENGINE ═══════════════════
 function runAnalysis(ticker, stockData, dataSource) {
   const p = stockData;
-  const hasHistory = p.prices && p.prices.length >= 20;
-  const prices = hasHistory ? p.prices : genPrices(p.price, 80, p.vol, ticker);
+  const hasHistory = p.prices && p.prices.length >= 50;
+  if (!hasHistory) throw new Error("真实历史K线不足50条，已停止技术分析，未使用模拟数据。请稍后重试或更换标的。");
+  const prices = p.prices;
   const closes = prices.map(d => d.close);
 
   // Moving averages
@@ -371,13 +356,12 @@ function runAnalysis(ticker, stockData, dataSource) {
   const rsi = calcRSI(closes, 14);
   const macd = calcMACD(closes);
   const atr = calcATR(prices, 14);
-  const curATR = atr.filter(v => v != null).pop() || p.price * 0.03;
+  const curATR = atr.filter(v => v != null).pop();
   const curRSI = rsi.filter(v => v !== null).pop() || 50;
   const curSMA20 = sma20.filter(v => v !== null).pop();
   const curSMA50 = sma50.filter(v => v !== null).pop();
   // Real SMA200 — use actual 200-day average if enough data, else use all available
-  const curSMA200 = sma200arr.filter(v => v !== null).pop() ||
-    (closes.length >= 60 ? closes.slice(-60).reduce((a, b) => a + b, 0) / 60 : p.price * 1.05);
+  const curSMA200 = sma200arr.filter(v => v !== null).pop() || null;
 
   const curMACD = macd.line[macd.line.length - 1];
   const curSignal = macd.signal[macd.signal.length - 1];
@@ -545,16 +529,12 @@ function runAnalysis(ticker, stockData, dataSource) {
   // Dynamic composite score from fundamentals + technicals
   const compositeScore = calcCompositeScore(fundScore, techScore, p.sent?.buzz);
 
-  // Rating thresholds — prefer dynamic score, fallback to preset only if no live data
-  const preset = PRESETS[ticker];
-  const usePreset = preset && dataSource !== "live";
-  const finalScore = dataSource === "live" ? compositeScore : (preset?.score ?? compositeScore);
-  const rating = usePreset ? (preset?.rating || scoreToRating(finalScore)) : scoreToRating(finalScore);
-  const sub = usePreset ? (preset?.sub || scoreToSub(finalScore)) : scoreToSub(finalScore);
+  const finalScore = compositeScore;
+  const rating = scoreToRating(finalScore);
+  const sub = scoreToSub(finalScore);
 
   // Generate dynamic verdict based on actual data
   const verdict = (() => {
-    if (usePreset && preset?.verdict) return preset.verdict;
     const parts = [];
     const companyName = p.name || p.companyName || ticker;
     parts.push(`${companyName} 当前价 ${p.cur}${curPrice.toFixed(2)}`);
@@ -683,7 +663,7 @@ export default function StockAnalysisTool() {
     setSentiment(null); setMacro(null); setNews(null); setFinData(null); setDataStatus([]); setEvents(null);
 
     try {
-    let stockData = null, dataSource = "demo";
+    let stockData = null, dataSource = "live";
     const status = [];
     const supplemental = {
       sentiment: fetchSentiment(t),
@@ -713,21 +693,18 @@ export default function StockAnalysisTool() {
       }
     }
 
-    // 2. Fallback to presets
-    if (!stockData && PRESETS[t]) {
-      stockData = PRESETS[t];
-      dataSource = "demo";
-    }
-
     if (!stockData) {
-      setError(`无法找到 "${t}" 的数据。请检查股票代码是否正确，或确认 API Key 有效。支持的预设标的: ${Object.keys(PRESETS).join(", ")}`);
+      setError(`无法从 FMP 获取 "${t}" 的真实行情。已停止分析，不会使用预设或模拟数据。请检查股票代码后重试。`);
       setLoading(false);
       setResult(null);
       return;
     }
-
-    let analysis = runAnalysis(t, stockData, dataSource);
-    // Don't setResult here — wait for parallel fetch to complete so badge doesn't flash
+    if (!(stockData.price > 0)) {
+      setError(`${t} 没有可验证的实时价格，已停止分析。`);
+      setLoading(false);
+      setResult(null);
+      return;
+    }
 
     // 4. Fetch external data (sentiment, macro, news, financials, history) in parallel
     status.push({ name: "FMP 行情", ok: dataSource === "live", level: dataSource === "live" ? "complete" : "degraded", note: dataSource === "live" ? "实时价格/52周/市值" : "预设数据(可能过时)" });
@@ -735,16 +712,16 @@ export default function StockAnalysisTool() {
     const [sent, mac, nws, fin, hist, evts, unifiedRating, iv] = await Promise.all([
       supplemental.sentiment,
       supplemental.macro,
-      fetchNews(stockData.name?.split(" ")[0] || t),
+      fetchNews(t),
       supplemental.financials,
       supplemental.history,
       supplemental.events,
       supplemental.rating,
-      fetchIV(t, analysis.price),
+      fetchIV(t, stockData.price),
     ]);
 
-    // 4a. If real historical bars available, re-run analysis with real data
-    if (hist.ok && hist.bars && hist.bars.length >= 30) {
+    let analysis;
+    if (hist.ok && hist.bars && hist.bars.length >= 50) {
       stockData.prices = hist.bars; // attach real OHLCV to stockData
       analysis = runAnalysis(t, stockData, dataSource);
       // Compute real YTD from yearStartPrice
@@ -756,10 +733,9 @@ export default function StockAnalysisTool() {
       status.push({ name: "历史K线", ok: true, level: hist.count >= 200 ? "complete" : hist.count >= 50 ? "degraded" : "degraded", note: `${hist.count}天真实OHLCV (${hist.bars[0]?.date}~${hist.bars[hist.bars.length - 1]?.date})${hist.count < 200 ? " (<200天, 部分长期指标精度降低)" : ""}` });
       status.push({ name: "技术指标", ok: true, level: hist.count >= 100 ? "complete" : "degraded", note: `真实K线计算 (SMA/EMA/RSI/MACD/ATR)${hist.count < 100 ? " (<100天, SMA200不可用)" : ""}` });
     } else {
-      // No real history — analysis uses genPrices (simulated), mark clearly
-      analysis = { ...analysis, historySource: "simulated" };
-      status.push({ name: "历史K线", ok: false, level: "missing", note: hist.error ? hist.error : "该股票历史数据不可用" });
-      status.push({ name: "技术指标", ok: false, level: "missing", note: "⚠ 基于模拟K线，仅供趋势参考" });
+      setError(`无法取得 ${t} 至少50条真实历史K线，已停止分析。${hist.error ? ` 原因：${hist.error}` : ""}`);
+      setResult(null);
+      return;
     }
     // Don't setResult here yet — wait for financials merge to avoid badge flash
 
@@ -776,7 +752,7 @@ export default function StockAnalysisTool() {
         analysis = { ...analysis, score: newScore, rating: newRating, sub: newSub };
       }
     }
-    status.push({ name: "社交情绪", ok: sent.ok, level: sent.ok ? (sent.count > 25 ? "complete" : sent.count > 10 ? "degraded" : "degraded") : "missing", note: sent.ok ? `StockTwits ${sent.count}帖, Bullish ${sent.bullPct}%${sent.count <= 10 ? " (样本偏少)" : ""}` : sent.error });
+    status.push({ name: "社交情绪", ok: sent.ok && sent.labeledCount >= 10, level: sent.labeledCount >= 20 ? "complete" : sent.labeledCount >= 10 ? "degraded" : "missing", note: sent.ok ? `StockTwits ${sent.count}帖，其中 ${sent.labeledCount || 0} 条有方向标签；看多 ${sent.bullPct}%${sent.labeledCount < 10 ? "（有效样本不足，评级按中性50处理）" : ""}` : sent.error });
 
     setMacro(mac);
     status.push({ name: "宏观数据", ok: mac.ok, level: mac.ok ? "complete" : "missing", note: mac.ok ? `10Y ${mac.yield10y}, FedFunds ${mac.fedFunds}` : mac.error });
@@ -866,16 +842,22 @@ export default function StockAnalysisTool() {
       }
     } else {
       setFinData(null);
-      const hasPreset = !!PRESETS[t];
-      status.push({ name: "财务报表", ok: hasPreset, level: hasPreset ? "degraded" : "missing", note: hasPreset ? "预设数据(非实时)" : (fin.error ? fin.error : `${t} 财务报表需 FMP 付费套餐`) });
+      status.push({ name: "财务报表", ok: false, level: "missing", note: fin.error ? fin.error : `${t} 财务报表不可用；页面不会以预设值代替` });
       status.push({ name: "分析师预测", ok: false, level: "missing", note: "需FMP付费套餐" });
     }
 
     // The server rating is authoritative for both this site and the radar batch job.
     if (unifiedRating.ok && unifiedRating.rating) {
       const unified = unifiedRating.rating;
+      const unifiedFundamentals = unifiedRating.metrics?.fundamentals || {};
       analysis = {
         ...analysis,
+        fin: {
+          ...analysis.fin,
+          fwdPE: unifiedFundamentals.fwdPe ?? analysis.fin?.fwdPE ?? null,
+          fwdPESource: unifiedFundamentals.fwdPeSource || null,
+          estimateDate: unifiedFundamentals.estimateDate || null
+        },
         score: unified.score,
         rating: unified.rating,
         sub: unified.ratingEn,
@@ -893,10 +875,14 @@ export default function StockAnalysisTool() {
         name: "统一评级",
         ok: unified.confidence >= 50,
         level: unified.confidence >= 80 ? "complete" : unified.confidence >= 50 ? "degraded" : "missing",
-        note: `${unified.score}分 · ${unified.rating} · 数据可信度 ${unified.confidence}%`
+        note: `${unified.score}分 · ${unified.rating} · 评分指标完整度 ${unified.confidence}%`
       });
     } else {
       status.push({ name: "统一评级", ok: false, level: "missing", note: unifiedRating.error || "评级接口暂不可用" });
+      setError(`统一评级所需的真实数据暂不可用，已停止输出买入/持有/观望结论。${unifiedRating.error ? ` 原因：${unifiedRating.error}` : ""}`);
+      setResult(null);
+      setDataStatus(status);
+      return;
     }
 
     setResult(analysis); // Single setResult after all data is merged — prevents badge flashing
@@ -969,10 +955,10 @@ export default function StockAnalysisTool() {
       {/* Quick Picks */}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 20 }}>
         <span style={{ fontSize: 11, color: T.dim, lineHeight: "28px" }}>快速选择:</span>
-        {Object.entries(PRESETS).map(([k, v]) => (
+        {Object.entries(QUICK_PICKS).map(([k, name]) => (
           <button key={k} className="sa-btn" onClick={() => { setInput(k); doAnalyze(k); }}
             style={{ padding: "4px 12px", borderRadius: 6, border: `1px solid ${activeTicker === k ? T.blue : T.border}`, background: activeTicker === k ? T.blue + "22" : "transparent", color: activeTicker === k ? T.blue : T.muted, fontSize: 12, cursor: "pointer", fontWeight: activeTicker === k ? 700 : 400 }}>
-            {k} {v.name.split(" ")[0]}
+            {k} {name}
           </button>
         ))}
       </div>
@@ -1079,7 +1065,7 @@ export default function StockAnalysisTool() {
                 <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
                   基本面 {result.fundScore != null ? result.fundScore + "分" : "N/A"}(权重45%) · 技术面 {result.techScore}分(40%) · 情绪 {result.sent?.buzz ?? 50}分(15%)
                 </div>
-                {result.ratingConfidence != null && <div style={{ fontSize: 10, color: T.dim, marginTop: 3 }}>数据可信度 {result.ratingConfidence}%（{result.ratingConfidenceLabel}）</div>}
+                {result.ratingConfidence != null && <div style={{ fontSize: 10, color: T.dim, marginTop: 3 }}>评分指标完整度 {result.ratingConfidence}%（{result.ratingConfidenceLabel}）</div>}
               </div>
             </div>
           </Card>
@@ -1123,7 +1109,7 @@ export default function StockAnalysisTool() {
                 <span><b style={{ color: T.red }}>&lt;40 谨慎回避</b> (Avoid)</span>
               </div>
               <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
-                评分仅为研究排序参考，不构成投资建议。缺失指标按中性处理并降低数据可信度；模拟K线不参与统一评级。
+                评分仅为研究排序参考，不构成投资建议。完整度只表示模型所需字段返回了多少，不代表数据绝对正确；缺失指标按中性处理并降低完整度。
               </div>
             </div>
           </details>
@@ -1225,7 +1211,7 @@ export default function StockAnalysisTool() {
                           <span style={{ fontSize: 13, color: T.muted, marginLeft: 10 }}>{events.earnings.date}</span>
                           {events.earnings.hour && events.earnings.hour !== "TBD" && <span style={{ fontSize: 12, color: T.dim, marginLeft: 6 }}>({events.earnings.hour})</span>}
                         </div>
-                        <Badge text={events.earnings.estimated ? "预估日期" : `准确日期 · ${events.earnings.source || "Nasdaq"}`} color={events.earnings.estimated ? T.yellow : T.green} />
+                        <Badge text={`日历日期 · ${events.earnings.source || "FMP"}`} color={T.green} />
                       </div>
                       <div style={{ fontSize: 12, color: T.muted, marginTop: 4, display: "flex", gap: 14, flexWrap: "wrap" }}>
                         {events.earnings.fiscalQuarterEnding && <span>财报季度: {events.earnings.fiscalQuarterEnding}</span>}
@@ -1774,13 +1760,13 @@ export default function StockAnalysisTool() {
 
               {/* ═══ P3: SCENARIO STRESS TEST ═══ */}
               <Card style={{ marginTop: 16 }}>
-                <SectionTitle icon="&#x1F3AF;">三情景压力测试 <span style={{ fontSize: 11, color: T.muted, fontWeight: 400 }}>基于ATR波动率模型推算，非分析师预测</span></SectionTitle>
+                <SectionTitle icon="&#x1F3AF;">三情景压力测试 <span style={{ fontSize: 11, color: T.muted, fontWeight: 400 }}>机械波动区间，不是目标价或概率预测</span></SectionTitle>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
                   {result.scenarios.items.map((sc, i) => (
                     <div key={i} style={{ flex: "1 1 180px", background: T.cardAlt, borderRadius: 10, padding: "14px 16px", borderTop: `3px solid ${sc.color}` }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                         <span style={{ fontSize: 14, fontWeight: 800, color: sc.color }}>{sc.name}</span>
-                        <Badge text={`权重${(sc.prob * 100).toFixed(0)}%`} color={sc.color} />
+                        <Badge text={`假设权重${(sc.prob * 100).toFixed(0)}%`} color={sc.color} />
                       </div>
                       <div style={{ fontSize: 24, fontWeight: 800, color: T.text, marginBottom: 4 }}>
                         {result.cur}{sc.target.toFixed(2)}
@@ -1795,16 +1781,16 @@ export default function StockAnalysisTool() {
 
                 {/* Expected Value */}
                 <div style={{ background: `linear-gradient(135deg, ${T.cardAlt}, #1a2744)`, borderRadius: 10, padding: "14px 16px", marginBottom: 14 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 10 }}>概率加权预期 <span style={{ fontSize: 10, color: T.dim }}>(模型估算，仅供参考)</span></div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 10 }}>假设加权结果 <span style={{ fontSize: 10, color: T.dim }}>(权重固定为25/50/25，不代表真实发生概率)</span></div>
                   <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
                     <div style={{ flex: "1 1 120px" }}>
-                      <div style={{ fontSize: 11, color: T.muted }}>预期价值</div>
+                      <div style={{ fontSize: 11, color: T.muted }}>假设加权价</div>
                       <div style={{ fontSize: 20, fontWeight: 800, color: result.scenarios.expectedReturn >= 0 ? T.green : T.red }}>
                         {result.cur}{result.scenarios.expectedValue}
                       </div>
                     </div>
                     <div style={{ flex: "1 1 120px" }}>
-                      <div style={{ fontSize: 11, color: T.muted }}>预期收益率</div>
+                      <div style={{ fontSize: 11, color: T.muted }}>假设加权变动</div>
                       <div style={{ fontSize: 20, fontWeight: 800, color: result.scenarios.expectedReturn >= 0 ? T.green : T.red }}>
                         {result.scenarios.expectedReturn >= 0 ? "+" : ""}{result.scenarios.expectedReturn}%
                       </div>
@@ -1816,7 +1802,7 @@ export default function StockAnalysisTool() {
                       </div>
                     </div>
                     <div style={{ flex: "1 1 120px" }}>
-                      <div style={{ fontSize: 11, color: T.muted }}>建议止损</div>
+                      <div style={{ fontSize: 11, color: T.muted }}>参考防守位</div>
                       <div style={{ fontSize: 20, fontWeight: 800, color: T.red }}>
                         {result.cur}{result.scenarios.stopLoss}
                       </div>
@@ -2062,7 +2048,7 @@ export default function StockAnalysisTool() {
                         ? `${result.tech.signals.filter(s => s.color === T.green).length}多/${result.tech.signals.filter(s => s.color === T.red).length}空/${result.tech.signals.filter(s => s.color === T.yellow).length}中性 — 信号未完全一致, 需更多确认`
                         : "技术指标不足, 无法形成一致判断",
                         ev: result.tech.isRealHistory && result.tech.historyLen > 100 ? "中-高" : result.tech.isRealHistory ? "中" : "低" },
-                      { t: "仓位建议", d: `当前 ATR ${result.tech.atrPct.toFixed(1)}%, ${result.tech.atrPct > 3 ? "波动较大, 宜轻仓试探" : result.tech.atrPct > 1.5 ? "波动适中, 可标准配置" : "波动较低, 可适当加仓"}. 首批不超40%`, ev: result.dataSource === "live" && result.tech.isRealHistory ? "高" : result.dataSource === "live" || result.tech.isRealHistory ? "中" : "低" },
+                      { t: "风险预算示例", d: `当前 ATR ${result.tech.atrPct.toFixed(1)}%。仓位比例仅为演示模板，未考虑你的资产规模、持仓相关性、投资期限和最大可承受亏损，不能直接作为下单建议。`, ev: "低" },
                     ].map((n, i) => (
                       <div key={i} style={{ padding: "8px 10px", background: T.yellow + "08", borderRadius: 6, marginBottom: 5, borderLeft: `2px solid ${T.yellow}` }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

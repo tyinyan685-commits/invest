@@ -22,10 +22,13 @@ function normalizeHistory(value) {
 
 function nextAnalystEstimate(estimates, latestFiscalDate) {
   const cutoff = String(latestFiscalDate || "");
-  return (Array.isArray(estimates) ? estimates : [])
+  const candidate = (Array.isArray(estimates) ? estimates : [])
     .filter((row) => numberOrNull(row.estimatedEpsAvg ?? row.epsAvg) !== null)
     .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))
     .find((row) => !cutoff || String(row.date || "") > cutoff) || null;
+  if (!candidate?.date || !latestFiscalDate) return candidate;
+  const horizonDays = Math.round((new Date(candidate.date) - new Date(latestFiscalDate)) / 86400000);
+  return horizonDays > 0 && horizonDays <= 550 ? { ...candidate, horizonDays } : null;
 }
 
 async function loadSentiment(symbol) {
@@ -68,7 +71,7 @@ export default async function handler(req, res) {
       quote: `${FMP_BASE}/quote?symbol=${encoded}&apikey=${FMP_KEY}`,
       income: `${FMP_BASE}/income-statement?symbol=${encoded}&period=annual&limit=3&apikey=${FMP_KEY}`,
       metrics: `${FMP_BASE}/key-metrics-ttm?symbol=${encoded}&apikey=${FMP_KEY}`,
-      estimates: `${FMP_BASE}/analyst-estimates?symbol=${encoded}&period=annual&limit=4&apikey=${FMP_KEY}`,
+      estimates: `${FMP_BASE}/analyst-estimates?symbol=${encoded}&period=annual&limit=10&apikey=${FMP_KEY}`,
       history: `${FMP_BASE}/historical-price-eod/full?symbol=${encoded}&apikey=${FMP_KEY}`
     };
     const [profiles, quotes, incomeRows, metricRows, estimates, historyValue, sentiment] = await Promise.all([
@@ -102,6 +105,7 @@ export default async function handler(req, res) {
       fwdPe,
       fwdPeSource: fwdPe === null ? null : "FMP analyst-estimates",
       estimateDate: analystEstimate?.date || null,
+      estimateHorizonDays: analystEstimate?.horizonDays ?? null,
       revenueGrowth: growth(revenue, priorRevenue),
       netIncomeGrowth: growth(netIncome, priorNetIncome),
       roe: roeRaw === null ? null : roeRaw * 100,
@@ -121,7 +125,14 @@ export default async function handler(req, res) {
       generatedAt: new Date().toISOString(),
       rating,
       metrics: { fundamentals, technical, sentiment },
-      dataPolicy: "仅使用真实接口数据；缺失指标按中性处理；模拟K线不参与评级。"
+      sources: {
+        marketAndFinancials: "Financial Modeling Prep",
+        sentiment: sentiment.source,
+        priceAsOf: technical.latestDate,
+        fiscalAsOf: fundamentals.fiscalDate,
+        estimateAsOf: fundamentals.estimateDate
+      },
+      dataPolicy: "仅使用真实接口返回值；缺失指标按中性处理并降低指标完整度。完整度不等于准确率，评分不代表收益预测。"
     });
   } catch (error) {
     setCORS(res);

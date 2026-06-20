@@ -33,28 +33,29 @@ export default async function handler(req, res) {
     }
 
     // Income statement
-    const revenue = inc?.revenue || 0;
-    const netIncome = inc?.netIncome || 0;
-    const grossProfit = inc?.grossProfit || 0;
-    const eps = inc?.epsDiluted || inc?.eps || 0;
-    const shares = inc?.weightedAverageShsOut || 0;
-    const grossMargin = revenue > 0 ? (grossProfit / revenue * 100) : 0;
-    const netMargin = revenue > 0 ? (netIncome / revenue * 100) : 0;
+    const valueOrNull = (value) => value === null || value === undefined || value === "" ? null : Number(value);
+    const revenue = valueOrNull(inc?.revenue);
+    const netIncome = valueOrNull(inc?.netIncome);
+    const grossProfit = valueOrNull(inc?.grossProfit);
+    const eps = valueOrNull(inc?.epsDiluted ?? inc?.eps);
+    const shares = valueOrNull(inc?.weightedAverageShsOut);
+    const grossMargin = revenue > 0 && grossProfit !== null ? (grossProfit / revenue * 100) : null;
+    const netMargin = revenue > 0 && netIncome !== null ? (netIncome / revenue * 100) : null;
 
     // Growth rates
     const revenueGrowth = fg?.revenueGrowth ? fg.revenueGrowth * 100 : (
-      incPrev?.revenue ? ((revenue - incPrev.revenue) / incPrev.revenue * 100) : 0
+      revenue !== null && incPrev?.revenue ? ((revenue - incPrev.revenue) / incPrev.revenue * 100) : null
     );
     const niGrowth = fg?.netIncomeGrowth ? fg.netIncomeGrowth * 100 : (
-      incPrev?.netIncome ? ((netIncome - incPrev.netIncome) / incPrev.netIncome * 100) : 0
+      netIncome !== null && incPrev?.netIncome ? ((netIncome - incPrev.netIncome) / Math.abs(incPrev.netIncome) * 100) : null
     );
     const epsGrowth = fg?.epsdilutedGrowth ? fg.epsdilutedGrowth * 100 : (
-      incPrev?.epsDiluted ? ((eps - (incPrev.epsDiluted || incPrev.eps)) / (incPrev.epsDiluted || incPrev.eps || 1) * 100) : 0
+      eps !== null && (incPrev?.epsDiluted ?? incPrev?.eps) ? ((eps - (incPrev.epsDiluted ?? incPrev.eps)) / Math.abs(incPrev.epsDiluted ?? incPrev.eps) * 100) : null
     );
 
     // ROE, ROA
-    const roe = km?.returnOnEquity ? km.returnOnEquity * 100 : 0;
-    const roa = km?.returnOnAssets ? km.returnOnAssets * 100 : 0;
+    const roe = km?.returnOnEquity != null ? km.returnOnEquity * 100 : null;
+    const roa = km?.returnOnAssets != null ? km.returnOnAssets * 100 : null;
 
     // Key metrics
     const marketCap = km?.marketCap || 0;
@@ -114,15 +115,15 @@ export default async function handler(req, res) {
       ok: true,
       // Income
       revenue, netIncome, grossProfit, eps, shares,
-      grossMargin: +grossMargin.toFixed(1),
-      netMargin: +netMargin.toFixed(1),
+      grossMargin: grossMargin === null ? null : +grossMargin.toFixed(1),
+      netMargin: netMargin === null ? null : +netMargin.toFixed(1),
       // Growth
-      revenueGrowth: +revenueGrowth.toFixed(1),
-      niGrowth: +niGrowth.toFixed(1),
-      epsGrowth: +epsGrowth.toFixed(1),
+      revenueGrowth: revenueGrowth === null ? null : +revenueGrowth.toFixed(1),
+      niGrowth: niGrowth === null ? null : +niGrowth.toFixed(1),
+      epsGrowth: epsGrowth === null ? null : +epsGrowth.toFixed(1),
       // Profitability
-      roe: +roe.toFixed(1),
-      roa: +roa.toFixed(1),
+      roe: roe === null ? null : +roe.toFixed(1),
+      roa: roa === null ? null : +roa.toFixed(1),
       // Market
       marketCap, evToSales: +evToSales.toFixed(1), evToEBITDA: +evToEBITDA.toFixed(1),
       currentRatio: +currentRatio.toFixed(2),

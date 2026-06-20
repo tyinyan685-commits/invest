@@ -198,7 +198,8 @@ export function scoreRating({ fundamentals = {}, technical = {}, sentiment = {} 
       technical: technicalResult,
       sentiment: sentimentResult
     },
-    modelVersion: "2026-06-20-v1"
+    metricCompleteness: confidence,
+    modelVersion: "2026-06-20-v2"
   };
 }
 
