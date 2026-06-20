@@ -9,60 +9,12 @@ export default async function handler(req, res) {
     const today = new Date();
     const fmtDate = (d) => d.toISOString().slice(0, 10);
 
-    // Parallel: quarterly income (fallback) + key economic series + Nasdaq earnings search
-    // First, generate list of upcoming business days to search
-    const searchDates = [];
-    for (let i = 1; i <= 60 && searchDates.length < 30; i++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() + i);
-      if (d.getDay() !== 0 && d.getDay() !== 6) searchDates.push(fmtDate(d));
-    }
+    const calendarEnd = new Date(today);
+    calendarEnd.setDate(calendarEnd.getDate() + 60);
 
-    // Query Nasdaq earnings calendar in parallel batches of 8
-    let earnings = null;
-    const NASDAQ = "https://api.nasdaq.com/api/calendar/earnings";
-    const nasdaqHeaders = {
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-      "Accept": "application/json",
-    };
-
-    for (let batch = 0; batch < searchDates.length && !earnings; batch += 8) {
-      const batchDates = searchDates.slice(batch, batch + 8);
-      const results = await Promise.all(
-        batchDates.map(async (date) => {
-          try {
-            const r = await fetch(`${NASDAQ}?date=${date}`, {
-              headers: nasdaqHeaders,
-              signal: AbortSignal.timeout(8000),
-            });
-            const d = await r.json();
-            return { date, rows: d?.data?.rows || [] };
-          } catch (e) {
-            return { date, rows: [] };
-          }
-        })
-      );
-      for (const { date, rows } of results) {
-        const match = rows.find(r => r.symbol === symbol);
-        if (match) {
-          earnings = {
-            date,
-            estimated: false,
-            hour: match.time === "time-after-hours" ? "\u76D8\u540E" : match.time === "time-pre-market" ? "\u76D8\u524D" : "TBD",
-            epsForecast: match.epsForecast ? parseFloat(String(match.epsForecast).replace(/[$,]/g, "")) || null : null,
-            lastYearEPS: match.lastYearEPS ? parseFloat(String(match.lastYearEPS).replace(/[$,]/g, "")) || null : null,
-            lastYearDate: match.lastYearRptDt || null,
-            fiscalQuarterEnding: match.fiscalQuarterEnding || null,
-            analystCount: match.noOfEsts ? parseInt(match.noOfEsts) : null,
-            source: "Nasdaq",
-          };
-          break;
-        }
-      }
-    }
-
-    // Parallel: quarterly income (for earnings fallback) + key economic series
-    const [qIncRes, cpiRes, ppiRes, unrateRes, payRes, fomcRes] = await Promise.all([
+    // One FMP calendar request replaces up to 30 day-by-day Nasdaq requests.
+    const [earningsCalendar, qIncRes, cpiRes, ppiRes, unrateRes, payRes, fomcRes] = await Promise.all([
+      fetchJSON(`${FMP_BASE}/earnings-calendar?from=${fmtDate(today)}&to=${fmtDate(calendarEnd)}&apikey=${FMP_KEY}`),
       fetchJSON(`${FMP_BASE}/income-statement?symbol=${encodeURIComponent(symbol)}&apikey=${FMP_KEY}&limit=4&period=quarter`),
       fetchJSON(`${FRED_BASE}/series/observations?series_id=CPIAUCSL&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`),
       fetchJSON(`${FRED_BASE}/series/observations?series_id=PPIACO&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=14`),
@@ -71,7 +23,22 @@ export default async function handler(req, res) {
       fetchJSON(`${FRED_BASE}/series/observations?series_id=FEDFUNDS&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=3`),
     ]);
 
-    // Fallback: estimate earnings from quarterly income pattern if Nasdaq didn't find it
+    const calendarMatch = Array.isArray(earningsCalendar)
+      ? earningsCalendar.find((row) => String(row.symbol || "").toUpperCase() === String(symbol).toUpperCase())
+      : null;
+    let earnings = calendarMatch
+      ? {
+          date: calendarMatch.date || null,
+          estimated: false,
+          hour: calendarMatch.time === "amc" ? "盘后" : calendarMatch.time === "bmo" ? "盘前" : "TBD",
+          epsForecast: calendarMatch.epsEstimated ?? null,
+          revenueForecast: calendarMatch.revenueEstimated ?? null,
+          fiscalQuarterEnding: calendarMatch.fiscalDateEnding || null,
+          source: "FMP earnings-calendar",
+        }
+      : null;
+
+    // Fallback: estimate earnings from quarterly income pattern if the calendar has no match.
     if (!earnings && Array.isArray(qIncRes) && qIncRes.length > 0) {
       const latest = qIncRes[0];
       const acceptedDate = latest.acceptedDate ? new Date(latest.acceptedDate.split(" ")[0]) : null;

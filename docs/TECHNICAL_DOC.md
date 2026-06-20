@@ -73,7 +73,7 @@ invest-app/
 
 **第三步：首次技术分析。** `runAnalysis(ticker, stockData, dataSource)` 计算技术指标（SMA/EMA/RSI/MACD/ATR/布林带/VWMA）、支撑阻力位、情景分析。如果没有真实历史K线（`prices` 为 null），使用确定性伪随机数生成器（mulberry32，以 ticker 字符串为种子）生成模拟K线。
 
-**第四步：并行获取补充数据。** 同时发起 6 个请求：情绪（StockTwits）、宏观（FRED）、新闻（NewsAPI）、财务报表（FMP 7个并行）、历史K线（FMP）、事件日历（Nasdaq+FRED）。
+**第四步：并行获取补充数据。** 在公司概况请求开始时，同时预取情绪、宏观、财务报表、历史K线、事件日历和统一评级；取得公司名称后补充新闻请求。事件日历使用一次 FMP 日历查询，不再逐日扫描 Nasdaq。Futu IV 仅在 localhost 开发环境请求，线上直接使用历史波动率替代。
 
 **第五步：合并真实数据。** 如果历史K线 ≥30 条，替换模拟数据并重新运行 `runAnalysis`；如果财务报表成功且 EPS 不为 null，用真实数据覆盖预设财务，重新计算基本面评分和综合评分；用 StockTwits 真实 bullPct 替换预设情绪值。
 

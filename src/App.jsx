@@ -182,6 +182,8 @@ const fetchRating = async (symbol) => {
 // Futu OpenD bridge - local proxy for real options IV data
 const FUTU_BRIDGE = "http://localhost:9876";
 const fetchIV = async (symbol, price) => {
+  const isLocal = typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  if (!isLocal) return { ok: false, skipped: true, error: "Futu bridge is local-only" };
   try {
     const r = await fetch(`${FUTU_BRIDGE}/api/option-volatility?symbol=${encodeURIComponent(symbol)}&price=${price}`, { signal: AbortSignal.timeout(8000) });
     return await safeJson(r);
@@ -683,6 +685,14 @@ export default function StockAnalysisTool() {
     try {
     let stockData = null, dataSource = "demo";
     const status = [];
+    const supplemental = {
+      sentiment: fetchSentiment(t),
+      macro: fetchMacro(),
+      financials: fetchFinancials(t),
+      history: fetchHistory(t),
+      events: fetchEvents(t),
+      rating: fetchRating(t),
+    };
 
     // 1. Try FMP profile API for live price data (via serverless proxy)
     {
@@ -722,14 +732,15 @@ export default function StockAnalysisTool() {
     // 4. Fetch external data (sentiment, macro, news, financials, history) in parallel
     status.push({ name: "FMP 行情", ok: dataSource === "live", level: dataSource === "live" ? "complete" : "degraded", note: dataSource === "live" ? "实时价格/52周/市值" : "预设数据(可能过时)" });
 
-    const [sent, mac, nws, fin, hist, evts, unifiedRating] = await Promise.all([
-      fetchSentiment(t),
-      fetchMacro(),
+    const [sent, mac, nws, fin, hist, evts, unifiedRating, iv] = await Promise.all([
+      supplemental.sentiment,
+      supplemental.macro,
       fetchNews(stockData.name?.split(" ")[0] || t),
-      fetchFinancials(t),
-      fetchHistory(t),
-      fetchEvents(t),
-      fetchRating(t),
+      supplemental.financials,
+      supplemental.history,
+      supplemental.events,
+      supplemental.rating,
+      fetchIV(t, analysis.price),
     ]);
 
     // 4a. If real historical bars available, re-run analysis with real data
@@ -779,12 +790,11 @@ export default function StockAnalysisTool() {
     }
 
     // 4b. Try to fetch real options IV from Futu OpenD bridge (optional, local only)
-    const iv = await fetchIV(t, analysis.price);
     setIvData(iv.ok ? iv : null);
     if (iv.ok) {
       status.push({ name: "期权IV", ok: true, level: "complete", note: `IV ${iv.avg_iv}%, HV ${iv.avg_hv}%, 溢价 ${iv.vol_premium}% (${iv.contracts_scanned}合约)` });
     } else {
-      status.push({ name: "期权IV", ok: false, level: "degraded", note: "Futu桥接未连接 (使用HV历史波动率替代)" });
+      status.push({ name: "期权IV", ok: false, level: "degraded", note: iv.skipped ? "线上使用HV历史波动率；本地连接Futu桥接可读取IV" : "Futu桥接未连接 (使用HV历史波动率替代)" });
     }
 
     setNews(nws);
