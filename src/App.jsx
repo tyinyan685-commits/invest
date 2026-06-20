@@ -793,8 +793,8 @@ export default function StockAnalysisTool() {
     setIvData(iv.ok ? iv : null);
     if (iv.ok) {
       status.push({ name: "期权IV", ok: true, level: "complete", note: `IV ${iv.avg_iv}%, HV ${iv.avg_hv}%, 溢价 ${iv.vol_premium}% (${iv.contracts_scanned}合约)` });
-    } else {
-      status.push({ name: "期权IV", ok: false, level: "degraded", note: iv.skipped ? "线上使用HV历史波动率；本地连接Futu桥接可读取IV" : "Futu桥接未连接 (使用HV历史波动率替代)" });
+    } else if (!iv.skipped) {
+      status.push({ name: "期权IV", ok: false, level: "degraded", note: "本地Futu桥接未连接，使用HV历史波动率替代" });
     }
 
     setNews(nws);
@@ -1729,7 +1729,7 @@ export default function StockAnalysisTool() {
                   <div style={{ marginBottom: 14 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                       <Badge text="历史计算" color={T.yellow} />
-                      <span style={{ fontSize: 11, color: T.muted }}>基于历史价格计算 (启动Futu桥接可获取实时期权IV)</span>
+                      <span style={{ fontSize: 11, color: T.muted }}>基于真实历史价格计算；期权IV为可选高级数据，不参与综合评级</span>
                     </div>
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                       <div style={{ flex: "1 1 140px", background: T.cardAlt, padding: "10px 12px", borderRadius: 8, borderLeft: `3px solid ${T.purple}` }}>
