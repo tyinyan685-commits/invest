@@ -104,7 +104,7 @@ export default async function handler(req, res) {
       estimateDate: analystEstimate?.date || null,
       revenueGrowth: growth(revenue, priorRevenue),
       netIncomeGrowth: growth(netIncome, priorNetIncome),
-      roe: roeRaw === null ? null : Math.abs(roeRaw) <= 1 ? roeRaw * 100 : roeRaw,
+      roe: roeRaw === null ? null : roeRaw * 100,
       grossMargin: ratioPercent(grossProfit, revenue),
       fiscalDate: latestIncome.date || null
     };
