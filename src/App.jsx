@@ -172,6 +172,13 @@ const fetchEvents = async (symbol) => {
   } catch (e) { return { ok: false, error: e.message, earnings: null, macroEvents: [], indicators: {} }; }
 };
 
+const fetchRating = async (symbol) => {
+  try {
+    const r = await fetch(`/api/rating?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(20000) });
+    return await safeJson(r);
+  } catch (e) { return { ok: false, error: e.message }; }
+};
+
 // Futu OpenD bridge - local proxy for real options IV data
 const FUTU_BRIDGE = "http://localhost:9876";
 const fetchIV = async (symbol, price) => {
@@ -659,8 +666,6 @@ export default function StockAnalysisTool() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
-  const [apiKey, setApiKey] = useState("");
-  const [showKey, setShowKey] = useState(false);
   const [sentiment, setSentiment] = useState(null);
   const [macro, setMacro] = useState(null);
   const [news, setNews] = useState(null);
@@ -717,13 +722,14 @@ export default function StockAnalysisTool() {
     // 4. Fetch external data (sentiment, macro, news, financials, history) in parallel
     status.push({ name: "FMP 行情", ok: dataSource === "live", level: dataSource === "live" ? "complete" : "degraded", note: dataSource === "live" ? "实时价格/52周/市值" : "预设数据(可能过时)" });
 
-    const [sent, mac, nws, fin, hist, evts] = await Promise.all([
+    const [sent, mac, nws, fin, hist, evts, unifiedRating] = await Promise.all([
       fetchSentiment(t),
       fetchMacro(),
       fetchNews(stockData.name?.split(" ")[0] || t),
       fetchFinancials(t),
       fetchHistory(t),
       fetchEvents(t),
+      fetchRating(t),
     ]);
 
     // 4a. If real historical bars available, re-run analysis with real data
@@ -855,6 +861,34 @@ export default function StockAnalysisTool() {
       status.push({ name: "分析师预测", ok: false, level: "missing", note: "需FMP付费套餐" });
     }
 
+    // The server rating is authoritative for both this site and the radar batch job.
+    if (unifiedRating.ok && unifiedRating.rating) {
+      const unified = unifiedRating.rating;
+      analysis = {
+        ...analysis,
+        score: unified.score,
+        rating: unified.rating,
+        sub: unified.ratingEn,
+        fundScore: unified.components?.fundamental?.score ?? analysis.fundScore,
+        techScore: unified.components?.technical?.score ?? analysis.techScore,
+        sent: {
+          ...analysis.sent,
+          buzz: unified.components?.sentiment?.score ?? analysis.sent?.buzz ?? 50
+        },
+        ratingConfidence: unified.confidence,
+        ratingConfidenceLabel: unified.confidenceLabel,
+        ratingModelVersion: unified.modelVersion
+      };
+      status.push({
+        name: "统一评级",
+        ok: unified.confidence >= 50,
+        level: unified.confidence >= 80 ? "complete" : unified.confidence >= 50 ? "degraded" : "missing",
+        note: `${unified.score}分 · ${unified.rating} · 数据可信度 ${unified.confidence}%`
+      });
+    } else {
+      status.push({ name: "统一评级", ok: false, level: "missing", note: unifiedRating.error || "评级接口暂不可用" });
+    }
+
     setResult(analysis); // Single setResult after all data is merged — prevents badge flashing
     setDataStatus(status);
     } catch (err) {
@@ -907,22 +941,6 @@ export default function StockAnalysisTool() {
         <span style={{ fontSize: 12, color: T.dim, background: T.card, padding: "2px 8px", borderRadius: 4 }}>v2.1</span>
         <span style={{ fontSize: 11, color: T.dim }}>多维度股票监测评估系统</span>
         {result && <Badge text={result.dataSource === "live" ? (result.finSource === "live" ? "实时行情 + 实时财务" : result.fin?.finAvailable === "preset" ? "实时行情 + 预设财务(参考)" : "实时行情 · 财务数据不可用") : "演示数据"} color={result.dataSource === "live" ? (result.finSource === "live" ? T.green : result.fin?.finAvailable === "preset" ? T.yellow : T.red) : T.red} />}
-      </div>
-
-      {/* API KEY SETTINGS */}
-      <div style={{ marginBottom: 12 }}>
-        <button onClick={() => setShowKey(!showKey)} style={{ background: "none", border: "none", color: T.dim, fontSize: 11, cursor: "pointer", padding: 0 }}>
-          {showKey ? "▾" : "▸"} API 设置 {apiKey ? "(已配置)" : "(未配置)"}
-        </button>
-        {showKey && (
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
-            <input value={apiKey} onChange={e => setApiKey(e.target.value)}
-              placeholder="输入 FMP API Key (financialmodelingprep.com 免费注册)"
-              style={{ flex: 1, minWidth: mob ? 160 : 260, padding: "6px 10px", borderRadius: 6, border: `1px solid ${T.border}`, background: T.card, color: T.text, fontSize: 12, fontFamily: "inherit", outline: "none" }}
-            />
-            <span style={{ fontSize: 10, color: T.dim }}>Key 仅存于浏览器内存</span>
-          </div>
-        )}
       </div>
 
       {/* SEARCH */}
@@ -1051,6 +1069,7 @@ export default function StockAnalysisTool() {
                 <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
                   基本面 {result.fundScore != null ? result.fundScore + "分" : "N/A"}(权重45%) · 技术面 {result.techScore}分(40%) · 情绪 {result.sent?.buzz ?? 50}分(15%)
                 </div>
+                {result.ratingConfidence != null && <div style={{ fontSize: 10, color: T.dim, marginTop: 3 }}>数据可信度 {result.ratingConfidence}%（{result.ratingConfidenceLabel}）</div>}
               </div>
             </div>
           </Card>
@@ -1088,13 +1107,13 @@ export default function StockAnalysisTool() {
                 </div>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
-                <span><b style={{ color: T.green }}>≥70 买入</b> (Accumulate)</span>
-                <span><b style={{ color: T.yellow }}>55-69 持有</b> (Hold)</span>
-                <span><b style={{ color: T.orange }}>40-54 观望</b> (Neutral)</span>
-                <span><b style={{ color: T.red }}>&lt;40 回避</b> (Avoid)</span>
+                <span><b style={{ color: T.green }}>≥70 积极关注</b> (Accumulate)</span>
+                <span><b style={{ color: T.yellow }}>55-69 持有观察</b> (Hold)</span>
+                <span><b style={{ color: T.orange }}>40-54 中性观察</b> (Neutral)</span>
+                <span><b style={{ color: T.red }}>&lt;40 谨慎回避</b> (Avoid)</span>
               </div>
               <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
-                ⚠ 评分仅为量化辅助参考，不构成投资建议。基本面数据缺失时基本面权重归零，评分仅基于技术面+情绪。
+                评分仅为研究排序参考，不构成投资建议。缺失指标按中性处理并降低数据可信度；模拟K线不参与统一评级。
               </div>
             </div>
           </details>
