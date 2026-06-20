@@ -28,6 +28,86 @@ function modelApplicability(profile) {
     : { suitable: true, reason: null };
 }
 
+async function loadExpectationHistory(symbol) {
+  const base = (process.env.EXPECTATIONS_API_BASE || "https://www.wiseain.com").replace(/\/$/, "");
+  try {
+    const response = await fetch(`${base}/api/expectations?symbol=${encodeURIComponent(symbol)}`, {
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return Array.isArray(data.samples) ? data.samples : [];
+  } catch {
+    return [];
+  }
+}
+
+function analystRevision(currentEps, estimateDate, samples) {
+  if (!(currentEps > 0) || !estimateDate) return { usable: false, reason: "Current estimate unavailable" };
+  const today = new Date();
+  const candidates = samples
+    .map((sample) => ({
+      ...sample,
+      epsEstimate: numberOrNull(sample.epsEstimate),
+      daysCompared: Math.round((today - new Date(sample.date)) / 86400000)
+    }))
+    .filter((sample) => sample.epsEstimate > 0 && sample.estimateDate === estimateDate && sample.daysCompared >= 7 && sample.daysCompared <= 120)
+    .sort((a, b) => Math.abs(a.daysCompared - 30) - Math.abs(b.daysCompared - 30));
+  const reference = candidates[0];
+  if (!reference) return { usable: false, reason: "Need at least 7 days of comparable snapshots" };
+  return {
+    usable: true,
+    changePct: ((currentEps - reference.epsEstimate) / reference.epsEstimate) * 100,
+    currentEps,
+    referenceEps: reference.epsEstimate,
+    referenceDate: reference.date,
+    daysCompared: reference.daysCompared,
+    estimateDate
+  };
+}
+
+function classifyNews(stockNews, pressReleases) {
+  const positive = /\b(raises? guidance|boosts? outlook|beats? (estimates|expectations)|approved|approval|contract awarded|wins? contract|upgrades? to (buy|outperform)|record revenue)\b/i;
+  const negative = /\b(cuts? guidance|lowers? outlook|misses? (estimates|expectations)|investigation|subpoena|recall|downgrades? to (sell|underperform)|bankruptcy|fraud charges?)\b/i;
+  const seen = new Set();
+  const articles = [...pressReleases.map((row) => ({ ...row, sourceType: "press-release" })), ...stockNews.map((row) => ({ ...row, sourceType: "stock-news" }))]
+    .filter((row) => {
+      const key = row.url || row.title;
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 16);
+  let weightedSignal = 0;
+  const matchedEvents = [];
+  for (const article of articles) {
+    const title = String(article.title || "");
+    const isPositive = positive.test(title);
+    const isNegative = negative.test(title);
+    if (isPositive === isNegative) continue;
+    const published = new Date(article.publishedDate || article.date || 0);
+    const ageDays = Number.isFinite(published.getTime()) ? Math.max(0, (Date.now() - published) / 86400000) : 30;
+    const recencyWeight = ageDays <= 2 ? 1 : ageDays <= 7 ? 0.6 : 0.25;
+    const sourceWeight = article.sourceType === "press-release" ? 1 : 0.7;
+    const direction = isPositive ? 1 : -1;
+    weightedSignal += direction * recencyWeight * sourceWeight;
+    matchedEvents.push({
+      title,
+      url: article.url || null,
+      date: String(article.publishedDate || article.date || "").slice(0, 10),
+      direction: direction > 0 ? "positive" : "negative",
+      sourceType: article.sourceType
+    });
+  }
+  return {
+    usable: articles.length >= 3,
+    score: Math.max(30, Math.min(70, 50 + weightedSignal * 8)),
+    articleCount: articles.length,
+    matchedEvents: matchedEvents.slice(0, 5),
+    policy: "Only explicit event phrases are directional; unmatched headlines remain neutral."
+  };
+}
+
 function nextAnalystEstimate(estimates, latestFiscalDate) {
   const cutoff = String(latestFiscalDate || "");
   const candidate = (Array.isArray(estimates) ? estimates : [])
@@ -80,16 +160,19 @@ export default async function handler(req, res) {
       income: `${FMP_BASE}/income-statement?symbol=${encoded}&period=annual&limit=3&apikey=${FMP_KEY}`,
       metrics: `${FMP_BASE}/key-metrics-ttm?symbol=${encoded}&apikey=${FMP_KEY}`,
       estimates: `${FMP_BASE}/analyst-estimates?symbol=${encoded}&period=annual&limit=10&apikey=${FMP_KEY}`,
-      history: `${FMP_BASE}/historical-price-eod/full?symbol=${encoded}&apikey=${FMP_KEY}`
+      history: `${FMP_BASE}/historical-price-eod/full?symbol=${encoded}&apikey=${FMP_KEY}`,
+      pressReleases: `${FMP_BASE}/news/press-releases?symbols=${encoded}&limit=8&apikey=${FMP_KEY}`
     };
-    const [profiles, quotes, incomeRows, metricRows, estimates, historyValue, sentiment] = await Promise.all([
+    const [profiles, quotes, incomeRows, metricRows, estimates, historyValue, sentiment, expectationHistory, pressReleases] = await Promise.all([
       fetchJSONArray(urls.profile),
       fetchJSONArray(urls.quote),
       fetchJSONArray(urls.income),
       fetchJSONArray(urls.metrics),
       fetchJSONArray(urls.estimates),
       fetch(urls.history, { signal: AbortSignal.timeout(15000) }).then((response) => response.json()).catch(() => []),
-      loadSentiment(symbol)
+      loadSentiment(symbol),
+      loadExpectationHistory(symbol),
+      fetchJSONArray(urls.pressReleases)
     ]);
 
     const profile = first(profiles);
@@ -112,6 +195,7 @@ export default async function handler(req, res) {
     const fundamentals = {
       fwdPe,
       fwdPeSource: fwdPe === null ? null : "FMP analyst-estimates",
+      epsEstimate,
       estimateDate: analystEstimate?.date || null,
       estimateHorizonDays: analystEstimate?.horizonDays ?? null,
       revenueGrowth: growth(revenue, priorRevenue),
@@ -120,8 +204,12 @@ export default async function handler(req, res) {
       grossMargin: ratioPercent(grossProfit, revenue),
       fiscalDate: latestIncome.date || null
     };
+    const expectation = {
+      analystRevision: analystRevision(epsEstimate, fundamentals.estimateDate, expectationHistory),
+      news: classifyNews([], pressReleases)
+    };
     const applicability = modelApplicability(profile);
-    const calculatedRating = scoreRating({ fundamentals, technical, sentiment });
+    const calculatedRating = scoreRating({ fundamentals, technical, expectation, sentiment });
     const rating = applicability.suitable
       ? calculatedRating
       : { ...calculatedRating, rating: "模型适用性有限", ratingEn: "Limited applicability" };
@@ -137,15 +225,17 @@ export default async function handler(req, res) {
       generatedAt: new Date().toISOString(),
       rating,
       modelApplicability: applicability,
-      metrics: { fundamentals, technical, sentiment },
+      metrics: { fundamentals, technical, expectation, sentiment },
       sources: {
         marketAndFinancials: "Financial Modeling Prep",
         sentiment: sentiment.source,
+        analystRevisionHistory: "Supabase daily rating snapshots",
+        newsSignal: "FMP company press releases",
         priceAsOf: technical.latestDate,
         fiscalAsOf: fundamentals.fiscalDate,
         estimateAsOf: fundamentals.estimateDate
       },
-      dataPolicy: "仅使用真实接口返回值；缺失指标按中性处理并降低指标完整度。完整度不等于准确率，评分不代表收益预测。"
+      dataPolicy: "仅使用真实接口返回值；分析师修订必须有至少7天同预测期快照；新闻仅对明确事件短语定向；社交情绪使用中性先验收缩。缺失项按中性处理并降低指标完整度。"
     });
   } catch (error) {
     setCORS(res);

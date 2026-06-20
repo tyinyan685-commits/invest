@@ -867,6 +867,7 @@ export default function StockAnalysisTool() {
           ...analysis.sent,
           buzz: unified.components?.sentiment?.score ?? analysis.sent?.buzz ?? 50
         },
+        expectationDetails: unified.components?.expectation?.details || unified.components?.sentiment?.details || null,
         ratingConfidence: unified.confidence,
         ratingConfidenceLabel: unified.confidenceLabel,
         ratingModelVersion: unified.modelVersion
@@ -913,7 +914,7 @@ export default function StockAnalysisTool() {
   const tabs = [
     { key: "overview", label: "概览" }, { key: "fundamental", label: "基本面" },
     { key: "technical", label: "技术面" }, { key: "position", label: "仓位 & 风控" },
-    { key: "sentiment", label: "情绪" }, { key: "report", label: "综合报告" },
+    { key: "sentiment", label: "市场预期" }, { key: "report", label: "综合报告" },
   ];
   const tip = { background: T.cardAlt, border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 12, color: T.text };
 
@@ -1066,7 +1067,7 @@ export default function StockAnalysisTool() {
                 <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{result.sub}</div>
                 <div style={{ marginTop: 8 }}><ScoreGauge score={result.score} label="综合评分" size={80} /></div>
                 <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
-                  基本面 {result.fundScore != null ? result.fundScore + "分" : "N/A"}(权重45%) · 技术面 {result.techScore}分(40%) · 情绪 {result.sent?.buzz ?? 50}分(15%)
+                  基本面 {result.fundScore != null ? result.fundScore + "分" : "N/A"}(权重45%) · 技术面 {result.techScore}分(40%) · 市场预期 {result.sent?.buzz ?? 50}分(15%)
                 </div>
                 {result.ratingConfidence != null && <div style={{ fontSize: 10, color: T.dim, marginTop: 3 }}>评分指标完整度 {result.ratingConfidence}%（{result.ratingConfidenceLabel}）</div>}
               </div>
@@ -1105,10 +1106,10 @@ export default function StockAnalysisTool() {
                   价格 &gt; SMA50 +10 / 否则 -5</span>
                 </div>
                 <div style={{ flex: "1 1 140px", background: T.cardAlt, padding: "8px 12px", borderRadius: 6 }}>
-                  <b style={{ color: T.orange }}>情绪（15%）</b><br />
-                  <span style={{ color: T.dim }}>StockTwits 看多比例<br />
-                  &gt;60% 偏多 / &lt;40% 偏空<br />
-                  有方向标签少于20条时取中性50</span>
+                  <b style={{ color: T.orange }}>市场预期（15%）</b><br />
+                  <span style={{ color: T.dim }}>分析师 EPS 预测修订 45%<br />
+                  明确新闻事件信号 35%<br />
+                  StockTwits 收缩情绪 20%</span>
                 </div>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
@@ -1851,6 +1852,37 @@ export default function StockAnalysisTool() {
 
           {/* ═══ SENTIMENT ═══ */}
           <div style={{ display: tab === "sentiment" ? "block" : "none" }}>
+              {result.expectationDetails && (
+                <Card style={{ marginBottom: 16 }}>
+                  <SectionTitle icon="&#x1F9ED;">市场预期构成</SectionTitle>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <div style={{ flex: "1 1 190px", background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>分析师 EPS 修订 · 权重45%</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: result.expectationDetails.analyst?.available ? T.text : T.dim }}>{result.expectationDetails.analyst?.score ?? 50}分</div>
+                      <div style={{ fontSize: 10, color: T.dim }}>{result.expectationDetails.analyst?.available ? `${result.expectationDetails.analyst.daysCompared}天变化 ${result.expectationDetails.analyst.changePct >= 0 ? "+" : ""}${result.expectationDetails.analyst.changePct.toFixed(2)}%` : "历史快照不足，按中性处理"}</div>
+                    </div>
+                    <div style={{ flex: "1 1 190px", background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>明确新闻事件 · 权重35%</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: result.expectationDetails.news?.available ? T.text : T.dim }}>{result.expectationDetails.news?.score ?? 50}分</div>
+                      <div style={{ fontSize: 10, color: T.dim }}>扫描 {result.expectationDetails.news?.articleCount || 0} 条，匹配 {result.expectationDetails.news?.matchedEvents?.length || 0} 个明确事件</div>
+                    </div>
+                    <div style={{ flex: "1 1 190px", background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>StockTwits 收缩情绪 · 权重20%</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: T.text }}>{result.expectationDetails.social?.score ?? 50}分</div>
+                      <div style={{ fontSize: 10, color: T.dim }}>{result.expectationDetails.social?.labeledCount || 0} 条方向标签；加入20个中性先验样本</div>
+                    </div>
+                  </div>
+                  {result.expectationDetails.news?.matchedEvents?.length > 0 && (
+                    <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5 }}>
+                      {result.expectationDetails.news.matchedEvents.map((event, index) => (
+                        <a key={`${event.url || event.title}-${index}`} href={event.url || "#"} target="_blank" rel="noopener noreferrer" style={{ color: event.direction === "positive" ? T.green : T.red, fontSize: 11, textDecoration: "none" }}>
+                          {event.date || ""} · {event.direction === "positive" ? "正向明确事件" : "负向明确事件"} · {event.title}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              )}
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
                 {/* StockTwits Real Sentiment */}
                 <Card style={{ flex: "1 1 320px", minWidth: 280 }}>
@@ -1861,11 +1893,11 @@ export default function StockAnalysisTool() {
                         <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
                           <div style={{ flex: "1 1 80px", background: T.green + "15", border: `1px solid ${T.green}33`, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
                             <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, color: T.green }}>{sentiment.bullPct}%</div>
-                            <div style={{ fontSize: 11, color: T.muted }}>Bullish ({sentiment.bullish}帖)</div>
+                            <div style={{ fontSize: 11, color: T.muted }}>原始 Bullish ({sentiment.bullish}帖)</div>
                           </div>
                           <div style={{ flex: "1 1 80px", background: T.red + "15", border: `1px solid ${T.red}33`, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
                             <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, color: T.red }}>{sentiment.bearPct}%</div>
-                            <div style={{ fontSize: 11, color: T.muted }}>Bearish ({sentiment.bearish}帖)</div>
+                            <div style={{ fontSize: 11, color: T.muted }}>原始 Bearish ({sentiment.bearish}帖)</div>
                           </div>
                           <div style={{ flex: "1 1 80px", background: T.blue + "15", border: `1px solid ${T.blue}33`, borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
                             <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, color: T.blue }}>{sentiment.count}</div>

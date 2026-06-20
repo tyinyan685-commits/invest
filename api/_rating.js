@@ -159,30 +159,64 @@ function technicalScore(metrics) {
   return { score: Math.round(clamp(score)), available, total: 4, details };
 }
 
-function sentimentScore(sentiment) {
-  const labeledCount = Number(sentiment?.labeledCount || 0);
-  const bullPct = numberOrNull(sentiment?.bullPct);
-  const usable = labeledCount >= 20 && bullPct !== null;
+function expectationScore(expectation = {}, sentiment = {}) {
+  const analystRevision = numberOrNull(expectation.analystRevision?.changePct);
+  const analystUsable = expectation.analystRevision?.usable === true && analystRevision !== null;
+  const analystScore = analystUsable ? clamp(50 + analystRevision * 4) : 50;
+
+  const newsScoreValue = numberOrNull(expectation.news?.score);
+  const newsUsable = expectation.news?.usable === true && newsScoreValue !== null;
+  const newsScore = newsUsable ? clamp(newsScoreValue) : 50;
+
+  const bullish = Math.max(0, Number(sentiment?.bullish || 0));
+  const bearish = Math.max(0, Number(sentiment?.bearish || 0));
+  const labeledCount = bullish + bearish;
+  const socialScore = labeledCount ? ((bullish + 10) / (labeledCount + 20)) * 100 : 50;
+  const socialAvailability = Math.min(20, labeledCount);
+
+  const score = analystScore * 0.45 + newsScore * 0.35 + socialScore * 0.2;
   return {
-    score: usable ? Math.round(clamp(bullPct)) : 50,
-    available: usable ? 1 : 0,
-    total: 1,
-    sampleSize: labeledCount,
-    details: usable ? [{ metric: "StockTwits看多比例", value: bullPct, points: 0 }] : []
+    score: Math.round(clamp(score)),
+    available: (analystUsable ? 45 : 0) + (newsUsable ? 35 : 0) + socialAvailability,
+    total: 100,
+    details: {
+      analyst: {
+        score: Math.round(analystScore),
+        available: analystUsable,
+        changePct: analystRevision,
+        referenceDate: expectation.analystRevision?.referenceDate || null,
+        daysCompared: expectation.analystRevision?.daysCompared ?? null
+      },
+      news: {
+        score: Math.round(newsScore),
+        available: newsUsable,
+        matchedEvents: expectation.news?.matchedEvents || [],
+        articleCount: expectation.news?.articleCount || 0
+      },
+      social: {
+        score: Math.round(socialScore),
+        availableWeight: socialAvailability,
+        labeledCount,
+        bullish,
+        bearish,
+        rawBullPct: labeledCount ? (bullish / labeledCount) * 100 : null,
+        policy: "Beta-binomial shrinkage with 20 neutral pseudo-observations"
+      }
+    }
   };
 }
 
-export function scoreRating({ fundamentals = {}, technical = {}, sentiment = {} }) {
+export function scoreRating({ fundamentals = {}, technical = {}, expectation = {}, sentiment = {} }) {
   const fundamental = fundamentalScore(fundamentals);
   const technicalResult = technicalScore(technical);
-  const sentimentResult = sentimentScore(sentiment);
+  const expectationResult = expectationScore(expectation, sentiment);
   const score = Math.round(
-    fundamental.score * 0.45 + technicalResult.score * 0.4 + sentimentResult.score * 0.15
+    fundamental.score * 0.45 + technicalResult.score * 0.4 + expectationResult.score * 0.15
   );
   const confidence = Math.round(
     (fundamental.available / fundamental.total) * 45 +
       (technicalResult.available / technicalResult.total) * 40 +
-      (sentimentResult.available / sentimentResult.total) * 15
+      (expectationResult.available / expectationResult.total) * 15
   );
   const rating = score >= 70 ? "积极关注" : score >= 55 ? "持有观察" : score >= 40 ? "中性观察" : "谨慎回避";
   const ratingEn = score >= 70 ? "Accumulate" : score >= 55 ? "Hold" : score >= 40 ? "Neutral" : "Avoid";
@@ -196,10 +230,11 @@ export function scoreRating({ fundamentals = {}, technical = {}, sentiment = {} 
     components: {
       fundamental,
       technical: technicalResult,
-      sentiment: sentimentResult
+      expectation: expectationResult,
+      sentiment: expectationResult
     },
     metricCompleteness: confidence,
-    modelVersion: "2026-06-20-v2"
+    modelVersion: "2026-06-20-v3"
   };
 }
 
