@@ -866,6 +866,16 @@ export default function StockAnalysisTool() {
     }
   }, []);
 
+  // Auto-analyze from URL ?symbol= param (e.g. from wiseain.com deep link)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sym = params.get("symbol")?.trim().toUpperCase();
+    if (sym && /^[A-Z0-9.=\-]+$/.test(sym) && sym.length <= 20) {
+      setInput(sym);
+      doAnalyze(sym);
+    }
+  }, [doAnalyze]);
+
   const doSearch = () => doAnalyze(input);
   const tabs = [
     { key: "overview", label: "概览" }, { key: "fundamental", label: "基本面" },
