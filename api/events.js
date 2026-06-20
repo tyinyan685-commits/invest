@@ -58,14 +58,15 @@ export default async function handler(req, res) {
       if (!res?.observations?.length) return null;
       const obs = res.observations;
       const latest = obs[0];
-      const yearAgo = obs[obs.length - 1];
+      const yearAgo = obs[12] || null;
       if (!latest?.value || latest.value === ".") return null;
       const v = parseFloat(latest.value);
       const yv = yearAgo ? parseFloat(yearAgo.value) : v;
-      const yoy = yv > 0 ? +((v - yv) / yv * 100).toFixed(1) : 0;
+      const yoy = yv > 0 ? +((v - yv) / yv * 100).toFixed(1) : null;
       const prev = obs[1] || latest;
       const pv = parseFloat(prev?.value || latest.value);
-      return { value: +v.toFixed(1), yoy, mom: +(v - pv).toFixed(2), date: latest.date };
+      const mom = pv > 0 ? +((v - pv) / pv * 100).toFixed(2) : null;
+      return { value: +v.toFixed(1), yoy, mom, date: latest.date };
     };
 
     const cpi = parseYoY(cpiRes);
@@ -74,8 +75,8 @@ export default async function handler(req, res) {
     const pay = parseLatest(payRes);
     const ff = parseLatest(fomcRes);
 
-    if (cpi) indicators.cpi = { value: cpi.value, yoy: cpi.yoy + "%", mom: cpi.mom, date: cpi.date, label: "CPI", unit: "", desc: cpi.yoy > 3 ? "\u504F\u9AD8\uFF0C\u6210\u957F\u80A1\u4F30\u503C\u627F\u538B" : cpi.yoy > 2 ? "\u6E29\u548C" : "\u4F4E\u8FF7" };
-    if (ppi) indicators.ppi = { value: ppi.value, yoy: ppi.yoy + "%", mom: ppi.mom, date: ppi.date, label: "PPI", unit: "", desc: ppi.yoy > 4 ? "\u751F\u4EA7\u7AEF\u901A\u80C0\u538B\u529B" : ppi.yoy > 2 ? "\u751F\u4EA7\u7AEF\u6E29\u548C" : "\u751F\u4EA7\u7AEF\u4F4E\u8FF7" };
+    if (cpi) indicators.cpi = { value: cpi.value, yoy: cpi.yoy === null ? null : cpi.yoy + "%", mom: cpi.mom, date: cpi.date, label: "CPI 指数", unit: "", desc: cpi.yoy > 3 ? "\u504F\u9AD8\uFF0C\u6210\u957F\u80A1\u4F30\u503C\u627F\u538B" : cpi.yoy > 2 ? "\u6E29\u548C" : "\u4F4E\u8FF7" };
+    if (ppi) indicators.ppi = { value: ppi.value, yoy: ppi.yoy === null ? null : ppi.yoy + "%", mom: ppi.mom, date: ppi.date, label: "PPI 指数", unit: "", desc: ppi.yoy > 4 ? "\u751F\u4EA7\u7AEF\u901A\u80C0\u538B\u529B" : ppi.yoy > 2 ? "\u751F\u4EA7\u7AEF\u6E29\u548C" : "\u751F\u4EA7\u7AEF\u4F4E\u8FF7" };
     if (unrate) indicators.unemployment = { value: unrate.value, change: unrate.change, date: unrate.date, label: "\u5931\u4E1A\u7387", unit: "%", desc: unrate.value > 5 ? "\u52B3\u52A8\u5E02\u573A\u964D\u6E29" : "\u52B3\u52A8\u5E02\u573A\u7A33\u5065" };
     if (pay) indicators.nonfarm = { value: pay.value, change: pay.change, date: pay.date, label: "\u975E\u519C\u5C31\u4E1A", unit: "\u5343\u4EBA", desc: pay.change > 100 ? "\u5C31\u4E1A\u5F3A\u52B2" : pay.change > 0 ? "\u5C31\u4E1A\u7A33\u5B9A" : "\u5C31\u4E1A\u8D70\u5F31" };
     if (ff) indicators.fedFunds = { value: ff.value, date: ff.date, label: "Fed Funds", unit: "%", desc: "" };

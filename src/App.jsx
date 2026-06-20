@@ -1264,7 +1264,7 @@ export default function StockAnalysisTool() {
                       </div>
                     </div>
                   )}
-                  <div style={{ marginTop: 8, fontSize: 10, color: T.dim }}>来源: FRED + FMP quarterly income · 财报日期为预估值 · 仅供参考</div>
+                  <div style={{ marginTop: 8, fontSize: 10, color: T.dim }}>经济指标来源: FRED；财报日期仅在 FMP earnings-calendar 明确返回时显示。未来宏观发布日期未接入官方日历前保持为空。</div>
                 </Card>
               )}
 
