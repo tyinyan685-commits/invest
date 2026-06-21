@@ -1087,7 +1087,7 @@ export default function StockAnalysisTool() {
             </summary>
             <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.9, marginTop: 10 }}>
               <div style={{ marginBottom: 8 }}>
-                <b style={{ color: T.text }}>综合评分（0-100）</b> = 基本面 × 45% + 技术面 × 40% + 情绪 × 15%，以50为中枢上下浮动。
+                <b style={{ color: T.text }}>综合评分（0-100）</b> = 基本面 × 45% + 技术面 × 40% + 市场预期 × 15%，以50为中枢上下浮动。
               </div>
               <div style={{ display: "flex", gap: mob ? 8 : 20, flexWrap: "wrap", marginBottom: 10 }}>
                 <div style={{ flex: "1 1 180px", background: T.cardAlt, padding: "8px 12px", borderRadius: 6 }}>
@@ -2000,7 +2000,7 @@ export default function StockAnalysisTool() {
                   )}
                 </div>
                 <div style={{ marginTop: 12, padding: "8px 12px", background: T.yellow + "15", border: `1px solid ${T.yellow}33`, borderRadius: 6, fontSize: 11, color: T.yellow }}>
-                  数据来源: FMP Profile(行情) + Historical(K线) + Income Statement/Metrics(财务) · StockTwits(情绪) · FRED(宏观) · NewsAPI(新闻)
+                  数据来源: FMP Profile/History/Financials/News(行情、K线、财务、新闻) · StockTwits(社交样本) · FRED(宏观) · Supabase(预测历史快照)
                 </div>
               </Card>
             </div>
@@ -2245,7 +2245,7 @@ export default function StockAnalysisTool() {
 
       {/* Footer */}
       <div style={{ textAlign: "center", padding: "20px 0 8px", fontSize: 11, color: T.dim }}>
-        StockAnalyzer v2.1 · 数据来源: FMP(行情) · FRED(宏观) · StockTwits(情绪) · NewsAPI(新闻) · 仅供参考，不构成投资建议
+        StockAnalyzer v2.1 · 数据来源: FMP(行情/财务/新闻) · FRED(宏观) · StockTwits(社交样本) · Supabase(预测历史快照) · 仅供参考，不构成投资建议
       </div>
     </div>
   );
