@@ -5,6 +5,7 @@ import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
   AreaChart, Area, ComposedChart
 } from "recharts";
+import { compactNumber, finiteOr, fixed, signedPercent } from "./valueSafety.js";
 
 // ═══════════════════ THEME & CONSTANTS ═══════════════════
 const T = {
@@ -61,16 +62,9 @@ const calcATR = (data, p = 14) => {
   }
   return r;
 };
-const fmt = (n) => {
-  if (n == null || isNaN(n)) return "-";
-  if (Math.abs(n) >= 1e12) return (n / 1e12).toFixed(1) + "T";
-  if (Math.abs(n) >= 1e9) return (n / 1e9).toFixed(1) + "B";
-  if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + "M";
-  if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1) + "K";
-  return n.toFixed(0);
-};
-const pct = (n) => { if (n == null || isNaN(n)) return "N/A"; return (n >= 0 ? "+" : "") + n.toFixed(1) + "%"; };
-const safeNum = (v, fallback = 0) => (v != null && !isNaN(v) && isFinite(v)) ? v : fallback;
+const fmt = (n) => compactNumber(n);
+const pct = (n) => signedPercent(n);
+const safeNum = (v, fallback = 0) => finiteOr(v, fallback);
 const naOr = (v, fmtFn) => (v != null && v !== 0) ? fmtFn(v) : "N/A";
 
 // ═══════════════════ SCORING HELPERS ═══════════════════
@@ -1301,11 +1295,11 @@ export default function StockAnalysisTool() {
                   <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 10 }}>
                     {[
                       { l: "PE (TTM)", v: result.fin.pe != null ? result.fin.pe + "x" : "N/A", sub: result.fin.pe == null && result.finSource === "live" ? "公司当前亏损" : null },
-                      { l: "Forward PE", v: result.fin.fwdPE != null ? result.fin.fwdPE.toFixed(1) + "x" : "N/A", hl: T.blue, sub: result.fin.fwdPE == null && result.finSource === "live" ? "前瞻EPS仍为负" : null },
+                      { l: "Forward PE", v: fixed(result.fin.fwdPE, 1, "x"), hl: T.blue, sub: result.fin.fwdPE == null && result.finSource === "live" ? "前瞻EPS仍为负" : null },
                       { l: "PB", v: result.fin.pb != null ? result.fin.pb + "x" : "N/A" },
-                      { l: "股息率", v: result.fin.divY != null ? result.fin.divY.toFixed(2) + "%" : "N/A" },
-                      { l: "ROE", v: result.fin.roe != null ? result.fin.roe.toFixed(1) + "%" : "N/A" },
-                      { l: "毛利率", v: result.fin.gm != null ? result.fin.gm.toFixed(1) + "%" : "N/A" },
+                      { l: "股息率", v: fixed(result.fin.divY, 2, "%") },
+                      { l: "ROE", v: fixed(result.fin.roe, 1, "%") },
+                      { l: "毛利率", v: fixed(result.fin.gm, 1, "%") },
                     ].map((m, i) => (
                       <div key={i} style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8, borderLeft: m.hl ? `3px solid ${m.hl}` : "none" }}>
                         <div style={{ fontSize: 11, color: T.muted }}>{m.l}</div>
@@ -1343,7 +1337,7 @@ export default function StockAnalysisTool() {
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>净利率</div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.nm != null ? result.fin.nm.toFixed(1) + "%" : "N/A"}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700 }}>{fixed(result.fin.nm, 1, "%")}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>经营现金流 {result.finSource === "live" && result.fin.operatingCF ? <Badge text="实时" color={T.green} /> : ""}</div>
@@ -1413,9 +1407,9 @@ export default function StockAnalysisTool() {
                               <td style={{ padding: "8px 10px", textAlign: "right", color: niQoQ != null ? (niQoQ > 0 ? T.green : niQoQ < 0 ? T.red : T.dim) : T.dim, fontWeight: 600 }}>
                                 {niQoQ != null ? (niQoQ > 0 ? "+" : "") + niQoQ.toFixed(1) + "%" : "—"}
                               </td>
-                              <td style={{ padding: "8px 10px", textAlign: "right", color: q.grossMargin > 50 ? T.green : T.text }}>{q.grossMargin.toFixed(1)}%</td>
-                              <td style={{ padding: "8px 10px", textAlign: "right", color: q.netMargin > 20 ? T.green : T.text }}>{q.netMargin.toFixed(1)}%</td>
-                              <td style={{ padding: "8px 10px", textAlign: "right", color: T.text, fontWeight: 600 }}>{q.eps ? result.cur + q.eps.toFixed(2) : "—"}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", color: q.grossMargin > 50 ? T.green : T.text }}>{fixed(q.grossMargin, 1, "%", "—")}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", color: q.netMargin > 20 ? T.green : T.text }}>{fixed(q.netMargin, 1, "%", "—")}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", color: T.text, fontWeight: 600 }}>{q.eps != null ? result.cur + fixed(q.eps, 2, "", "—") : "—"}</td>
                             </tr>
                           );
                         })}
