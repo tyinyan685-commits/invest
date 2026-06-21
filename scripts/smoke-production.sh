@@ -4,6 +4,7 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-https://stocks.wiseain.com}"
 RADAR_HISTORY_URL="${RADAR_HISTORY_URL:-https://www.wiseain.com/api/history?days=30&limit=40}"
 CHROME_BIN="${CHROME_BIN:-google-chrome}"
+DELAY_SECONDS="${SMOKE_DELAY_SECONDS:-5}"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
@@ -32,6 +33,7 @@ while IFS= read -r symbol; do
     --dump-dom "$url" > "$page" 2> "$WORK_DIR/chrome.log"; then
     echo "::error title=$symbol smoke failed::Browser process failed or timed out"
     failures=$((failures + 1))
+    sleep "$DELAY_SECONDS"
     continue
   fi
   if ! grep -q "最终评级" "$page"; then
@@ -42,6 +44,7 @@ while IFS= read -r symbol; do
     echo "::error title=$symbol render boundary::The page reached the render error boundary"
     failures=$((failures + 1))
   fi
+  sleep "$DELAY_SECONDS"
 done < "$symbols"
 
 if (( failures > 0 )); then
