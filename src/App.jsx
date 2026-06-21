@@ -1132,7 +1132,7 @@ export default function StockAnalysisTool() {
           {/* ═══ OVERVIEW ═══ */}
           <div style={{ display: tab === "overview" ? "block" : "none" }}>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-                <MetricCard label="Forward PE" value={result.fin.fwdPE != null ? result.fin.fwdPE + "x" : "N/A"} sub={result.fin.fwdPE != null ? `行业 ${result.peers[2]?.pe || "-"}x` : "前瞻EPS仍为负，无法计算"} color={result.fin.fwdPE != null && result.fin.fwdPE < 25 ? T.green : result.fin.fwdPE != null ? T.yellow : T.dim} highlight={T.blue} />
+                <MetricCard label="Forward PE" value={result.fin.fwdPE != null ? result.fin.fwdPE.toFixed(1) + "x" : "N/A"} sub={result.fin.fwdPE != null ? `行业 ${result.peers[2]?.pe || "-"}x` : "前瞻EPS仍为负，无法计算"} color={result.fin.fwdPE != null && result.fin.fwdPE < 25 ? T.green : result.fin.fwdPE != null ? T.yellow : T.dim} highlight={T.blue} />
                 <MetricCard label="营收增速" value={result.fin.revG ? pct(result.fin.revG) : "N/A"} sub={`净利润 ${result.fin.niG ? pct(result.fin.niG) : "N/A"}`} color={result.fin.revG > 20 ? T.green : result.fin.revG > 0 ? T.yellow : result.fin.revG ? T.red : T.dim} highlight={T.green} />
                 <MetricCard label="RSI (14)" value={result.tech.rsi.toFixed(1)} sub={result.tech.rsi > 55 ? "偏多动能" : result.tech.rsi < 45 ? "偏弱" : "中性区间"} color={result.tech.rsi > 70 ? T.red : result.tech.rsi > 55 ? T.green : T.yellow} highlight={T.purple} />
                 <MetricCard label="MACD" value={result.tech.macd > result.tech.signal ? "金叉" : "死叉"} sub={`柱状 ${result.tech.hist > 0 ? "+" : ""}${result.tech.hist.toFixed(3)}`} color={result.tech.macd > result.tech.signal ? T.green : T.red} highlight={T.orange} />
@@ -1301,7 +1301,7 @@ export default function StockAnalysisTool() {
                   <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 10 }}>
                     {[
                       { l: "PE (TTM)", v: result.fin.pe != null ? result.fin.pe + "x" : "N/A", sub: result.fin.pe == null && result.finSource === "live" ? "公司当前亏损" : null },
-                      { l: "Forward PE", v: result.fin.fwdPE != null ? result.fin.fwdPE + "x" : "N/A", hl: T.blue, sub: result.fin.fwdPE == null && result.finSource === "live" ? "前瞻EPS仍为负" : null },
+                      { l: "Forward PE", v: result.fin.fwdPE != null ? result.fin.fwdPE.toFixed(1) + "x" : "N/A", hl: T.blue, sub: result.fin.fwdPE == null && result.finSource === "live" ? "前瞻EPS仍为负" : null },
                       { l: "PB", v: result.fin.pb != null ? result.fin.pb + "x" : "N/A" },
                       { l: "股息率", v: result.fin.divY.toFixed(2) + "%" },
                       { l: "ROE", v: result.fin.roe != null ? result.fin.roe.toFixed(1) + "%" : "N/A" },
@@ -1481,7 +1481,7 @@ export default function StockAnalysisTool() {
               <Card>
                 <SectionTitle icon="&#x1F50D;">可比公司估值对比 <span style={{ fontSize: 11, color: T.muted, fontWeight: 400 }}>{result.finSource === "live" ? "标的PE/PB为实时数据" : "预设参考值"}，可比公司为静态预设</span></SectionTitle>
                 <ResponsiveContainer width="100%" height={mob ? 170 : 220}>
-                  <BarChart data={[{ n: result.ticker, pe: result.fin.fwdPE, pb: result.fin.pb }, ...result.peers.map(p => ({ ...p }))]} barGap={4}>
+                  <BarChart data={[{ n: result.ticker, pe: result.fin.fwdPE == null ? null : +result.fin.fwdPE.toFixed(1), pb: result.fin.pb }, ...result.peers.map(p => ({ ...p }))]} barGap={4}>
                     <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
                     <XAxis dataKey="n" tick={{ fill: T.muted, fontSize: 12 }} />
                     <YAxis tick={{ fill: T.dim, fontSize: 11 }} />
@@ -2051,7 +2051,7 @@ export default function StockAnalysisTool() {
                     {[
                       // Generate bull arguments from real data
                       { t: "估值与增长", d: result.fin.fwdPE && result.fin.revG > 0
-                        ? `Forward PE ${result.fin.fwdPE}x, 营收增速 ${result.fin.revG.toFixed(1)}%, PEG ${(result.fin.fwdPE / Math.max(result.fin.revG, 1)).toFixed(1)} — ${result.fin.fwdPE / Math.max(result.fin.revG, 1) < 1.5 ? "性价比优秀" : "估值合理"}`
+                        ? `Forward PE ${result.fin.fwdPE.toFixed(1)}x, 营收增速 ${result.fin.revG.toFixed(1)}%, PEG ${(result.fin.fwdPE / Math.max(result.fin.revG, 1)).toFixed(1)} — ${result.fin.fwdPE / Math.max(result.fin.revG, 1) < 1.5 ? "性价比优秀" : "估值合理"}`
                         : result.bulls[0]?.d || "估值水平具有吸引力",
                         ev: result.finSource === "live" ? "高" : "中" },
                       { t: "技术面动能", d: result.tech.rsi > 50 && result.tech.macd > result.tech.signal
