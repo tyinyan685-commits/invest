@@ -1303,7 +1303,7 @@ export default function StockAnalysisTool() {
                       { l: "PE (TTM)", v: result.fin.pe != null ? result.fin.pe + "x" : "N/A", sub: result.fin.pe == null && result.finSource === "live" ? "公司当前亏损" : null },
                       { l: "Forward PE", v: result.fin.fwdPE != null ? result.fin.fwdPE.toFixed(1) + "x" : "N/A", hl: T.blue, sub: result.fin.fwdPE == null && result.finSource === "live" ? "前瞻EPS仍为负" : null },
                       { l: "PB", v: result.fin.pb != null ? result.fin.pb + "x" : "N/A" },
-                      { l: "股息率", v: result.fin.divY.toFixed(2) + "%" },
+                      { l: "股息率", v: result.fin.divY != null ? result.fin.divY.toFixed(2) + "%" : "N/A" },
                       { l: "ROE", v: result.fin.roe != null ? result.fin.roe.toFixed(1) + "%" : "N/A" },
                       { l: "毛利率", v: result.fin.gm != null ? result.fin.gm.toFixed(1) + "%" : "N/A" },
                     ].map((m, i) => (
