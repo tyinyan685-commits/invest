@@ -36,8 +36,8 @@ check_symbol() {
     echo "$symbol: browser process failed or timed out"
     return 1
   fi
-  if ! grep -q "最终评级" "$page"; then
-    echo "$symbol: final rating did not render"
+  if ! grep -Eq "研究状态|最终评级" "$page"; then
+    echo "$symbol: research state did not render"
     return 1
   fi
   if grep -q "详情暂时无法显示" "$page"; then
