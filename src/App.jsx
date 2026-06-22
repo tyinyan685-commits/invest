@@ -862,6 +862,8 @@ export default function StockAnalysisTool() {
           buzz: unified.components?.sentiment?.score ?? analysis.sent?.buzz ?? 50
         },
         expectationDetails: unified.components?.expectation?.details || unified.components?.sentiment?.details || null,
+        risk: unifiedRating.metrics?.risk || null,
+        researchState: unifiedRating.researchState || unified.rating,
         ratingConfidence: unified.confidence,
         ratingConfidenceLabel: unified.confidenceLabel,
         ratingModelVersion: unified.modelVersion
@@ -1056,9 +1058,9 @@ export default function StockAnalysisTool() {
                 )}
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>最终评级</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: result.score >= 65 ? T.green : result.score >= 45 ? T.yellow : T.red }}>{result.rating}</div>
-                <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>{result.sub}</div>
+                <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>研究状态</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: result.risk?.score >= 60 ? T.red : result.score >= 65 ? T.green : result.score >= 45 ? T.yellow : T.red }}>{result.researchState || result.rating}</div>
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>优先级 {result.rating} · 风险 {result.risk?.level || "待评估"}</div>
                 <div style={{ marginTop: 8 }}><ScoreGauge score={result.score} label="综合评分" size={80} /></div>
                 <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
                   基本面 {result.fundScore != null ? result.fundScore + "分" : "N/A"}(权重45%) · 技术面 {result.techScore}分(40%) · 市场预期 {result.sent?.buzz ?? 50}分(15%)
@@ -1131,6 +1133,7 @@ export default function StockAnalysisTool() {
                 <MetricCard label="RSI (14)" value={result.tech.rsi.toFixed(1)} sub={result.tech.rsi > 55 ? "偏多动能" : result.tech.rsi < 45 ? "偏弱" : "中性区间"} color={result.tech.rsi > 70 ? T.red : result.tech.rsi > 55 ? T.green : T.yellow} highlight={T.purple} />
                 <MetricCard label="MACD" value={result.tech.macd > result.tech.signal ? "金叉" : "死叉"} sub={`柱状 ${result.tech.hist > 0 ? "+" : ""}${result.tech.hist.toFixed(3)}`} color={result.tech.macd > result.tech.signal ? T.green : T.red} highlight={T.orange} />
                 <MetricCard label="ATR 波动率" value={result.tech.atrPct.toFixed(1) + "%"} sub={result.pos.overAlloc} color={result.tech.atrPct > 4 ? T.red : T.yellow} highlight={T.cyan} />
+                <MetricCard label="风险等级" value={result.risk?.level || "N/A"} sub={result.risk?.flags?.[0]?.message || "未发现主要量化风险项"} color={result.risk?.score >= 60 ? T.red : result.risk?.score >= 35 ? T.orange : T.green} highlight={T.red} />
               </div>
               <Card style={{ marginBottom: 16 }}>
                 <SectionTitle icon="&#x1F4E1;">技术信号汇总</SectionTitle>

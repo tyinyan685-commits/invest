@@ -1,5 +1,5 @@
 import { FMP_BASE, FMP_KEY, fetchJSONArray, setCORS, validateSymbol } from "./_lib.js";
-import { calculateTechnicalMetrics, numberOrNull, scoreRating } from "./_rating.js";
+import { assessRisk, calculateTechnicalMetrics, numberOrNull, researchState, scoreRating } from "./_rating.js";
 
 function first(value) {
   return Array.isArray(value) ? value[0] || {} : value || {};
@@ -213,6 +213,15 @@ export default async function handler(req, res) {
     const rating = applicability.suitable
       ? calculatedRating
       : { ...calculatedRating, rating: "模型适用性有限", ratingEn: "Limited applicability" };
+    const risk = assessRisk({
+      fwdPe: fundamentals.fwdPe,
+      beta: profile.beta ?? quote.beta,
+      annualizedVolatility20: technical.annualizedVolatility20,
+      maxDrawdown60: technical.maxDrawdown60,
+      latest: technical.latest,
+      sma50: technical.sma50
+    });
+    const state = researchState(rating.score, risk);
 
     setCORS(res);
     res.setHeader("Cache-Control", "public, s-maxage=1800, stale-while-revalidate=3600");
@@ -224,8 +233,9 @@ export default async function handler(req, res) {
       currency: profile.currency || null,
       generatedAt: new Date().toISOString(),
       rating,
+      researchState: state,
       modelApplicability: applicability,
-      metrics: { fundamentals, technical, expectation, sentiment },
+      metrics: { fundamentals, technical, expectation, sentiment, risk },
       sources: {
         marketAndFinancials: "Financial Modeling Prep",
         sentiment: sentiment.source,

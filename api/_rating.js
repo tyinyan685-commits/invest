@@ -64,6 +64,18 @@ export function calculateTechnicalMetrics(rows) {
   const closes = prices.map((row) => row.close);
   const latest = closes.at(-1) ?? null;
   const macd = latestMacd(closes);
+  const recentReturns = closes.slice(-21).slice(1).map((close, index) => (close - closes.slice(-21)[index]) / closes.slice(-21)[index]);
+  const meanReturn = average(recentReturns);
+  const returnVariance = meanReturn === null ? null : average(recentReturns.map((value) => (value - meanReturn) ** 2));
+  const annualizedVolatility20 = returnVariance === null ? null : Math.sqrt(returnVariance) * Math.sqrt(252) * 100;
+  const drawdownWindow = closes.slice(-60);
+  let peak = null;
+  let maxDrawdown60 = null;
+  for (const close of drawdownWindow) {
+    peak = peak === null ? close : Math.max(peak, close);
+    const drawdown = ((close - peak) / peak) * 100;
+    maxDrawdown60 = maxDrawdown60 === null ? drawdown : Math.min(maxDrawdown60, drawdown);
+  }
   return {
     latest,
     sma20: closes.length >= 20 ? average(closes.slice(-20)) : null,
@@ -72,8 +84,75 @@ export function calculateTechnicalMetrics(rows) {
     macdLine: macd.line,
     macdSignal: macd.signal,
     historyCount: closes.length,
-    latestDate: prices.at(-1)?.date ?? null
+    latestDate: prices.at(-1)?.date ?? null,
+    annualizedVolatility20,
+    maxDrawdown60
   };
+}
+
+export function assessRisk({ fwdPe, beta, annualizedVolatility20, maxDrawdown60, latest, sma50 } = {}) {
+  let score = 0;
+  let available = 0;
+  const flags = [];
+  const pe = numberOrNull(fwdPe);
+  const betaValue = numberOrNull(beta);
+  const volatility = numberOrNull(annualizedVolatility20);
+  const drawdown = numberOrNull(maxDrawdown60);
+  const price = numberOrNull(latest);
+  const average50 = numberOrNull(sma50);
+
+  if (pe !== null) {
+    available += 1;
+    const points = pe >= 100 ? 30 : pe >= 60 ? 22 : pe >= 40 ? 12 : pe >= 30 ? 5 : 0;
+    score += points;
+    if (points) flags.push({ metric: "Forward PE", value: pe, points, message: `Forward PE ${pe.toFixed(1)}x` });
+  }
+  if (volatility !== null) {
+    available += 1;
+    const points = volatility >= 80 ? 25 : volatility >= 50 ? 15 : volatility >= 35 ? 8 : 0;
+    score += points;
+    if (points) flags.push({ metric: "20日年化波动", value: volatility, points, message: `20日年化波动 ${volatility.toFixed(1)}%` });
+  }
+  if (betaValue !== null) {
+    available += 1;
+    const points = betaValue >= 2.5 ? 20 : betaValue >= 1.8 ? 12 : betaValue >= 1.3 ? 6 : 0;
+    score += points;
+    if (points) flags.push({ metric: "Beta", value: betaValue, points, message: `Beta ${betaValue.toFixed(2)}` });
+  }
+  if (drawdown !== null) {
+    available += 1;
+    const points = drawdown <= -30 ? 20 : drawdown <= -20 ? 12 : drawdown <= -12 ? 6 : 0;
+    score += points;
+    if (points) flags.push({ metric: "60日最大回撤", value: drawdown, points, message: `60日最大回撤 ${drawdown.toFixed(1)}%` });
+  }
+  if (price !== null && average50 !== null) {
+    available += 1;
+    const points = price < average50 ? 8 : 0;
+    score += points;
+    if (points) flags.push({ metric: "价格/SMA50", value: "下方", points, message: "价格位于 SMA50 下方" });
+  }
+
+  const normalizedScore = Math.min(100, Math.round(score));
+  const level = normalizedScore >= 60 ? "高" : normalizedScore >= 35 ? "中高" : normalizedScore >= 20 ? "中" : "低";
+  return {
+    score: normalizedScore,
+    level,
+    available,
+    total: 5,
+    flags: flags.sort((a, b) => b.points - a.points),
+    policy: "风险分独立于研究优先级，不参与综合评分；衡量估值、价格波动和回撤，不代表公司永久风险。"
+  };
+}
+
+export function researchState(score, risk) {
+  const riskScore = numberOrNull(risk?.score) ?? 0;
+  if (score >= 70 && riskScore >= 60) return "高风险观察";
+  if (score >= 70 && riskScore >= 35) return "优先研究，严控风险";
+  if (score >= 70) return "优先研究";
+  if (score >= 55 && riskScore >= 60) return "高风险等待";
+  if (score >= 55) return "持有观察";
+  if (riskScore >= 60) return "暂不参与";
+  return "中性观察";
 }
 
 function fundamentalScore(metrics) {
@@ -234,7 +313,7 @@ export function scoreRating({ fundamentals = {}, technical = {}, expectation = {
       sentiment: expectationResult
     },
     metricCompleteness: confidence,
-    modelVersion: "2026-06-20-v3"
+    modelVersion: "2026-06-22-v4"
   };
 }
 
