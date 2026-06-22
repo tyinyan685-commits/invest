@@ -29,3 +29,11 @@ export function compactNumber(value, fallback = "-") {
   if (Math.abs(number) >= 1e3) return `${(number / 1e3).toFixed(1)}K`;
   return number.toFixed(0);
 }
+
+export function dividendYield(lastDividend, price) {
+  const dividend = finiteNumber(lastDividend);
+  const currentPrice = finiteNumber(price);
+  if (dividend === null || currentPrice === null || currentPrice <= 0) return null;
+  if (dividend <= 0) return 0;
+  return (dividend / currentPrice) * 100;
+}

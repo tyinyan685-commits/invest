@@ -5,7 +5,7 @@ import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
   AreaChart, Area, ComposedChart
 } from "recharts";
-import { compactNumber, finiteOr, fixed, signedPercent } from "./valueSafety.js";
+import { compactNumber, dividendYield, finiteOr, fixed, signedPercent } from "./valueSafety.js";
 
 // ═══════════════════ THEME & CONSTANTS ═══════════════════
 const T = {
@@ -183,7 +183,7 @@ const mergeLiveWithPreset = (ticker, prof) => {
   const vol = null;
 
   // Dividend yield
-  const divY = safeNum(p.lastDividend, null) > 0 && price > 0 ? (safeNum(p.lastDividend) / price * 100) : null;
+  const divY = dividendYield(p.lastDividend, price);
 
   const fin = {
     pe: null, fwdPE: null, pb: null, rev: null, revG: null, ni: null, niG: null,
