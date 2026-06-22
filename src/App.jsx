@@ -864,6 +864,7 @@ export default function StockAnalysisTool() {
         expectationDetails: unified.components?.expectation?.details || unified.components?.sentiment?.details || null,
         risk: unifiedRating.metrics?.risk || null,
         researchState: unifiedRating.researchState || unified.rating,
+        sourceDates: unifiedRating.sources || null,
         ratingConfidence: unified.confidence,
         ratingConfidenceLabel: unified.confidenceLabel,
         ratingModelVersion: unified.modelVersion
@@ -1056,6 +1057,13 @@ export default function StockAnalysisTool() {
                     <span>Beta: {result.liveData.beta?.toFixed(2) || "-"}</span>
                   </div>
                 )}
+                {result.sourceDates && (
+                  <div style={{ display: "flex", gap: 12, marginTop: 6, fontSize: 10, color: T.dim, flexWrap: "wrap" }}>
+                    <span>价格截至 {result.sourceDates.priceAsOf || "未返回"}</span>
+                    <span>财报截至 {result.sourceDates.fiscalAsOf || "未返回"}</span>
+                    <span>预测期 {result.sourceDates.estimateAsOf || "未返回"}</span>
+                  </div>
+                )}
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>研究状态</div>
@@ -1116,6 +1124,9 @@ export default function StockAnalysisTool() {
               </div>
               <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
                 评分仅为研究排序参考，不构成投资建议。完整度只表示模型所需字段返回了多少，不代表数据绝对正确；缺失指标按中性处理并降低完整度。
+              </div>
+              <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
+                风险等级独立于综合评分，使用 Forward PE、20日年化波动、Beta、60日最大回撤和 SMA50 位置；它不会反向改写研究优先级。
               </div>
             </div>
           </details>
