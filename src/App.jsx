@@ -850,6 +850,7 @@ export default function StockAnalysisTool() {
           ...analysis.fin,
           fwdPE: unifiedFundamentals.fwdPe ?? analysis.fin?.fwdPE ?? null,
           fwdPESource: unifiedFundamentals.fwdPeSource || null,
+          fwdPEReason: unifiedFundamentals.fwdPeReason || null,
           estimateDate: unifiedFundamentals.estimateDate || null
         },
         score: unified.score,
@@ -1062,6 +1063,8 @@ export default function StockAnalysisTool() {
                     <span>价格截至 {result.sourceDates.priceAsOf || "未返回"}</span>
                     <span>财报截至 {result.sourceDates.fiscalAsOf || "未返回"}</span>
                     <span>预测期 {result.sourceDates.estimateAsOf || "未返回"}</span>
+                    <span>新闻截至 {result.sourceDates.newsAsOf || "未返回"}</span>
+                    <span>评级生成 {result.sourceDates.ratingGeneratedAt ? new Date(result.sourceDates.ratingGeneratedAt).toLocaleString() : "未返回"}</span>
                   </div>
                 )}
               </div>
@@ -1141,8 +1144,8 @@ export default function StockAnalysisTool() {
           {/* ═══ OVERVIEW ═══ */}
           <div style={{ display: tab === "overview" ? "block" : "none" }}>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-                <MetricCard label="Forward PE" value={result.fin.fwdPE != null ? result.fin.fwdPE.toFixed(1) + "x" : "N/A"} sub={result.fin.fwdPE != null ? `行业 ${result.peers[2]?.pe || "-"}x` : "前瞻EPS仍为负，无法计算"} color={result.fin.fwdPE != null && result.fin.fwdPE < 25 ? T.green : result.fin.fwdPE != null ? T.yellow : T.dim} highlight={T.blue} />
-                <MetricCard label="营收增速" value={result.fin.revG ? pct(result.fin.revG) : "N/A"} sub={`净利润 ${result.fin.niG ? pct(result.fin.niG) : "N/A"}`} color={result.fin.revG > 20 ? T.green : result.fin.revG > 0 ? T.yellow : result.fin.revG ? T.red : T.dim} highlight={T.green} />
+                <MetricCard label="Forward PE" value={result.fin.fwdPE != null ? result.fin.fwdPE.toFixed(1) + "x" : "N/A"} sub={result.fin.fwdPE != null ? `行业 ${result.peers[2]?.pe || "-"}x` : result.fin.fwdPEReason || "接口未返回可用预测"} color={result.fin.fwdPE != null && result.fin.fwdPE < 25 ? T.green : result.fin.fwdPE != null ? T.yellow : T.dim} highlight={T.blue} />
+                <MetricCard label="营收增速" value={result.fin.revG != null ? pct(result.fin.revG) : "N/A"} sub={`净利润 ${result.fin.niG != null ? pct(result.fin.niG) : "N/A"}`} color={result.fin.revG > 20 ? T.green : result.fin.revG > 0 ? T.yellow : result.fin.revG != null ? T.red : T.dim} highlight={T.green} />
                 <MetricCard label="RSI (14)" value={result.tech.rsi.toFixed(1)} sub={result.tech.rsi > 55 ? "偏多动能" : result.tech.rsi < 45 ? "偏弱" : "中性区间"} color={result.tech.rsi > 70 ? T.red : result.tech.rsi > 55 ? T.green : T.yellow} highlight={T.purple} />
                 <MetricCard label="MACD" value={result.tech.macd > result.tech.signal ? "金叉" : "死叉"} sub={`柱状 ${result.tech.hist > 0 ? "+" : ""}${result.tech.hist.toFixed(3)}`} color={result.tech.macd > result.tech.signal ? T.green : T.red} highlight={T.orange} />
                 <MetricCard label="ATR 波动率" value={result.tech.atrPct.toFixed(1) + "%"} sub={result.pos.overAlloc} color={result.tech.atrPct > 4 ? T.red : T.yellow} highlight={T.cyan} />
@@ -1869,12 +1872,12 @@ export default function StockAnalysisTool() {
                     <div style={{ flex: "1 1 190px", background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>分析师 EPS 修订 · 权重45%</div>
                       <div style={{ fontSize: 18, fontWeight: 800, color: result.expectationDetails.analyst?.available ? T.text : T.dim }}>{result.expectationDetails.analyst?.score ?? 50}分</div>
-                      <div style={{ fontSize: 10, color: T.dim }}>{result.expectationDetails.analyst?.available ? `${result.expectationDetails.analyst.daysCompared}天变化 ${result.expectationDetails.analyst.changePct >= 0 ? "+" : ""}${result.expectationDetails.analyst.changePct.toFixed(2)}%` : "历史快照不足，按中性处理"}</div>
+                      <div style={{ fontSize: 10, color: T.dim }}>{result.expectationDetails.analyst?.available ? `${result.expectationDetails.analyst.referenceDate || "基准日未知"} 至今 ${result.expectationDetails.analyst.daysCompared}天：${result.expectationDetails.analyst.changePct >= 0 ? "+" : ""}${result.expectationDetails.analyst.changePct.toFixed(2)}%` : `${result.expectationDetails.analyst?.reason || "历史快照不足"}，按中性处理`}</div>
                     </div>
                     <div style={{ flex: "1 1 190px", background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>明确新闻事件 · 权重35%</div>
                       <div style={{ fontSize: 18, fontWeight: 800, color: result.expectationDetails.news?.available ? T.text : T.dim }}>{result.expectationDetails.news?.score ?? 50}分</div>
-                      <div style={{ fontSize: 10, color: T.dim }}>扫描 {result.expectationDetails.news?.articleCount || 0} 条，匹配 {result.expectationDetails.news?.matchedEvents?.length || 0} 个明确事件</div>
+                      <div style={{ fontSize: 10, color: T.dim }}>截至 {result.expectationDetails.news?.latestArticleDate || "未返回"}；扫描 {result.expectationDetails.news?.articleCount || 0} 条，匹配 {result.expectationDetails.news?.matchedEvents?.length || 0} 个明确事件</div>
                     </div>
                     <div style={{ flex: "1 1 190px", background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>StockTwits 收缩情绪 · 权重20%</div>

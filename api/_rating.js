@@ -90,6 +90,15 @@ export function calculateTechnicalMetrics(rows) {
   };
 }
 
+export function forwardPeMetric(price, epsEstimate) {
+  const priceValue = numberOrNull(price);
+  const epsValue = numberOrNull(epsEstimate);
+  if (priceValue === null || priceValue <= 0) return { value: null, reason: "价格数据未返回" };
+  if (epsValue === null) return { value: null, reason: "分析师 EPS 预测未返回" };
+  if (epsValue <= 0) return { value: null, reason: "预测 EPS 非正，Forward PE 不适用" };
+  return { value: priceValue / epsValue, reason: null };
+}
+
 function interpolatedRiskPoints(value, anchors) {
   if (value <= anchors[0][0]) return anchors[0][1];
   for (let index = 1; index < anchors.length; index += 1) {
@@ -280,13 +289,15 @@ function expectationScore(expectation = {}, sentiment = {}) {
         available: analystUsable,
         changePct: analystRevision,
         referenceDate: expectation.analystRevision?.referenceDate || null,
-        daysCompared: expectation.analystRevision?.daysCompared ?? null
+        daysCompared: expectation.analystRevision?.daysCompared ?? null,
+        reason: expectation.analystRevision?.reason || null
       },
       news: {
         score: Math.round(newsScore),
         available: newsUsable,
         matchedEvents: expectation.news?.matchedEvents || [],
-        articleCount: expectation.news?.articleCount || 0
+        articleCount: expectation.news?.articleCount || 0,
+        latestArticleDate: expectation.news?.latestArticleDate || null
       },
       social: {
         score: Math.round(socialScore),

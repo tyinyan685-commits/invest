@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { calculateTechnicalMetrics, scoreRating } from "../api/_rating.js";
+import { calculateTechnicalMetrics, forwardPeMetric, scoreRating } from "../api/_rating.js";
 import { dividendYield, fixed } from "../src/valueSafety.js";
 
 function dailyPrices(count, start = 20) {
@@ -18,6 +18,7 @@ test("zero dividend is shown as zero while missing dividend stays unavailable", 
 });
 
 test("loss-making company does not receive an invented forward PE", () => {
+  assert.deepEqual(forwardPeMetric(100, -2), { value: null, reason: "预测 EPS 非正，Forward PE 不适用" });
   const result = scoreRating({
     fundamentals: { fwdPe: null, revenueGrowth: -8, netIncomeGrowth: -35, roe: -12, grossMargin: 18 },
     technical: {},
@@ -26,6 +27,12 @@ test("loss-making company does not receive an invented forward PE", () => {
   });
   assert.equal(result.components.fundamental.details.some((item) => item.metric === "FwdPE"), false);
   assert.ok(Number.isFinite(result.score));
+});
+
+test("forward PE distinguishes missing estimates from non-positive estimates", () => {
+  assert.deepEqual(forwardPeMetric(100, null), { value: null, reason: "分析师 EPS 预测未返回" });
+  assert.deepEqual(forwardPeMetric(null, 5), { value: null, reason: "价格数据未返回" });
+  assert.deepEqual(forwardPeMetric(100, 5), { value: 20, reason: null });
 });
 
 test("missing analyst coverage stays neutral and lowers completeness", () => {

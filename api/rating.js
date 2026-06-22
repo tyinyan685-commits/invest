@@ -1,5 +1,5 @@
 import { FMP_BASE, FMP_KEY, fetchJSONArray, setCORS, validateSymbol } from "./_lib.js";
-import { assessRisk, calculateTechnicalMetrics, numberOrNull, researchState, scoreRating } from "./_rating.js";
+import { assessRisk, calculateTechnicalMetrics, forwardPeMetric, numberOrNull, researchState, scoreRating } from "./_rating.js";
 
 function first(value) {
   return Array.isArray(value) ? value[0] || {} : value || {};
@@ -43,7 +43,7 @@ async function loadExpectationHistory(symbol) {
 }
 
 function analystRevision(currentEps, estimateDate, samples) {
-  if (!(currentEps > 0) || !estimateDate) return { usable: false, reason: "Current estimate unavailable" };
+  if (!(currentEps > 0) || !estimateDate) return { usable: false, reason: "当前分析师 EPS 预测不可用" };
   const today = new Date();
   const candidates = samples
     .map((sample) => ({
@@ -54,7 +54,7 @@ function analystRevision(currentEps, estimateDate, samples) {
     .filter((sample) => sample.epsEstimate > 0 && sample.estimateDate === estimateDate && sample.daysCompared >= 7 && sample.daysCompared <= 120)
     .sort((a, b) => Math.abs(a.daysCompared - 30) - Math.abs(b.daysCompared - 30));
   const reference = candidates[0];
-  if (!reference) return { usable: false, reason: "Need at least 7 days of comparable snapshots" };
+  if (!reference) return { usable: false, reason: "缺少至少7天前的同预测期快照" };
   return {
     usable: true,
     changePct: ((currentEps - reference.epsEstimate) / reference.epsEstimate) * 100,
@@ -103,6 +103,7 @@ function classifyNews(stockNews, pressReleases) {
     usable: articles.length >= 3,
     score: Math.max(30, Math.min(70, 50 + weightedSignal * 8)),
     articleCount: articles.length,
+    latestArticleDate: articles.map((article) => String(article.publishedDate || article.date || "").slice(0, 10)).filter(Boolean).sort().at(-1) || null,
     matchedEvents: matchedEvents.slice(0, 5),
     policy: "Only explicit event phrases are directional; unmatched headlines remain neutral."
   };
@@ -185,7 +186,7 @@ export default async function handler(req, res) {
     const technical = calculateTechnicalMetrics(history);
     const price = numberOrNull(quote.price ?? profile.price ?? technical.latest);
     const epsEstimate = numberOrNull(analystEstimate?.estimatedEpsAvg ?? analystEstimate?.epsAvg);
-    const fwdPe = price !== null && epsEstimate !== null && epsEstimate > 0 ? price / epsEstimate : null;
+    const forwardPe = forwardPeMetric(price, epsEstimate);
     const revenue = numberOrNull(latestIncome.revenue);
     const priorRevenue = numberOrNull(priorIncome.revenue);
     const netIncome = numberOrNull(latestIncome.netIncome);
@@ -193,8 +194,9 @@ export default async function handler(req, res) {
     const grossProfit = numberOrNull(latestIncome.grossProfit);
     const roeRaw = numberOrNull(metrics.returnOnEquityTTM);
     const fundamentals = {
-      fwdPe,
-      fwdPeSource: fwdPe === null ? null : "FMP analyst-estimates",
+      fwdPe: forwardPe.value,
+      fwdPeReason: forwardPe.reason,
+      fwdPeSource: forwardPe.value === null ? null : "FMP analyst-estimates",
       epsEstimate,
       estimateDate: analystEstimate?.date || null,
       estimateHorizonDays: analystEstimate?.horizonDays ?? null,
@@ -223,6 +225,7 @@ export default async function handler(req, res) {
     });
     const state = researchState(rating.score, risk, applicability);
 
+    const generatedAt = new Date().toISOString();
     setCORS(res);
     res.setHeader("Cache-Control", "public, s-maxage=1800, stale-while-revalidate=3600");
     return res.status(200).json({
@@ -231,7 +234,7 @@ export default async function handler(req, res) {
       name: profile.companyName || quote.name || symbol,
       price,
       currency: profile.currency || null,
-      generatedAt: new Date().toISOString(),
+      generatedAt,
       rating,
       researchState: state,
       modelApplicability: applicability,
@@ -243,7 +246,10 @@ export default async function handler(req, res) {
         newsSignal: "FMP company press releases",
         priceAsOf: technical.latestDate,
         fiscalAsOf: fundamentals.fiscalDate,
-        estimateAsOf: fundamentals.estimateDate
+        estimateAsOf: fundamentals.estimateDate,
+        analystReferenceAsOf: expectation.analystRevision?.referenceDate || null,
+        newsAsOf: expectation.news?.latestArticleDate || null,
+        ratingGeneratedAt: generatedAt
       },
       dataPolicy: "仅使用真实接口返回值；分析师修订必须有至少7天同预测期快照；新闻仅对明确事件短语定向；社交情绪使用中性先验收缩。缺失项按中性处理并降低指标完整度。"
     });
