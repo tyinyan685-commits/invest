@@ -155,7 +155,7 @@ export function assessRisk({ fwdPe, beta, annualizedVolatility20, maxDrawdown60,
     available,
     total: 5,
     flags: flags.sort((a, b) => b.points - a.points),
-    policy: "风险分独立于研究优先级，不参与综合评分；衡量估值、价格波动和回撤，不代表公司永久风险。"
+    policy: "风险分独立于综合评分；衡量估值、价格波动和回撤，并与综合分共同生成研究状态，不代表公司永久风险。"
   };
 }
 
