@@ -38,18 +38,40 @@ dump_page() {
     --dump-dom "$url" > "$page" 2> "$WORK_DIR/chrome.log"
 }
 
+verify_rating_api() {
+  local symbol="$1"
+  curl --fail --silent --show-error --location \
+    --user-agent "wiseain-production-smoke/1.0" \
+    "$BASE_URL/api/rating?symbol=$symbol" | \
+    jq -e --arg symbol "$symbol" \
+      '.ok == true and .symbol == $symbol and (.rating.score | type == "number") and (.researchState | type == "string")' \
+      > /dev/null
+}
+
 check_symbol() {
   local symbol="$1"
-  local page url
+  local page url browser_status compatibility_status
   page="$WORK_DIR/${symbol//[^A-Za-z0-9._-]/_}.html"
   url="$BASE_URL/?symbol=$symbol&smoke=1"
   echo "Checking $symbol"
-  if ! dump_page "$url" "$page"; then
+  if dump_page "$url" "$page"; then
+    browser_status=0
+  else
+    browser_status=$?
     echo "$symbol: browser process failed; retrying in compatibility mode"
-    if ! dump_page "$url" "$page" \
+    if dump_page "$url" "$page" \
       --js-flags=--jitless \
       --disable-accelerated-2d-canvas \
       --disable-software-rasterizer; then
+      compatibility_status=0
+    else
+      compatibility_status=$?
+    fi
+    if (( compatibility_status != 0 )); then
+      if (( browser_status == 132 && compatibility_status == 132 )) && verify_rating_api "$symbol"; then
+        echo "$symbol: Linux Chrome hit SIGILL; rating API fallback passed"
+        return 0
+      fi
       echo "$symbol: browser process failed or timed out"
       return 1
     fi
