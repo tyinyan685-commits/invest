@@ -6,6 +6,7 @@ import {
   AreaChart, Area, ComposedChart
 } from "recharts";
 import { compactNumber, dividendYield, finiteOr, fixed, signedPercent } from "./valueSafety.js";
+import { validateRatingPayload } from "./ratingContract.js";
 
 // ═══════════════════ THEME & CONSTANTS ═══════════════════
 const T = {
@@ -148,7 +149,7 @@ const fetchEvents = async (symbol) => {
 const fetchRating = async (symbol) => {
   try {
     const r = await fetch(`/api/rating?symbol=${encodeURIComponent(symbol)}`, { signal: AbortSignal.timeout(20000) });
-    return await safeJson(r);
+    return validateRatingPayload(await safeJson(r), symbol);
   } catch (e) { return { ok: false, error: e.message }; }
 };
 
@@ -1126,6 +1127,9 @@ export default function StockAnalysisTool() {
               </div>
               <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
                 评分仅为研究排序参考，不构成投资建议。完整度只表示模型所需字段返回了多少，不代表数据绝对正确；缺失指标按中性处理并降低完整度。
+              </div>
+              <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
+                评分指标完整度低于50%时，研究状态固定为“数据不足，暂缓判断”，不会因部分指标高分进入优先队列。
               </div>
               <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
                 风险分独立计算，不计入综合评分；它使用 Forward PE、20日年化波动、Beta、60日最大回撤和偏离 SMA50 的幅度连续计分，并与综合分共同生成研究状态。

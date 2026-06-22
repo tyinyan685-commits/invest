@@ -223,7 +223,7 @@ export default async function handler(req, res) {
       latest: technical.latest,
       sma50: technical.sma50
     });
-    const state = researchState(rating.score, risk, applicability);
+    const state = researchState(rating.score, risk, applicability, rating.confidence);
 
     const generatedAt = new Date().toISOString();
     setCORS(res);

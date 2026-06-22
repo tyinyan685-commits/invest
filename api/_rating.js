@@ -168,7 +168,8 @@ export function assessRisk({ fwdPe, beta, annualizedVolatility20, maxDrawdown60,
   };
 }
 
-export function researchState(score, risk, modelApplicability = { suitable: true }) {
+export function researchState(score, risk, modelApplicability = { suitable: true }, confidence = 100) {
+  if ((numberOrNull(confidence) ?? 0) < 50) return "数据不足，暂缓判断";
   if (modelApplicability?.suitable === false) return "行业专项评估";
   const riskScore = numberOrNull(risk?.score) ?? 0;
   if (score >= 70 && riskScore >= 60) return "高风险观察";

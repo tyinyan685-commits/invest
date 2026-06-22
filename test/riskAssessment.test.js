@@ -27,6 +27,11 @@ test("limited-applicability industries use a dedicated research state", () => {
   assert.equal(researchState(75, risk, { suitable: false }), "行业专项评估");
 });
 
+test("low completeness blocks an otherwise high-priority state", () => {
+  const risk = assessRisk({ fwdPe: 20, beta: 1, annualizedVolatility20: 20, maxDrawdown60: -4, latest: 120, sma50: 110 });
+  assert.equal(researchState(90, risk, { suitable: true }, 49), "数据不足，暂缓判断");
+});
+
 test("missing risk inputs reduce coverage without inventing flags", () => {
   const risk = assessRisk({ fwdPe: null, beta: null });
   assert.equal(risk.available, 0);
