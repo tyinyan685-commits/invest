@@ -221,7 +221,7 @@ export default async function handler(req, res) {
       latest: technical.latest,
       sma50: technical.sma50
     });
-    const state = researchState(rating.score, risk);
+    const state = researchState(rating.score, risk, applicability);
 
     setCORS(res);
     res.setHeader("Cache-Control", "public, s-maxage=1800, stale-while-revalidate=3600");

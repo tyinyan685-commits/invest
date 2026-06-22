@@ -1067,7 +1067,7 @@ export default function StockAnalysisTool() {
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 12, color: T.muted, marginBottom: 4 }}>研究状态</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: result.risk?.score >= 60 ? T.red : result.score >= 65 ? T.green : result.score >= 45 ? T.yellow : T.red }}>{result.researchState || result.rating}</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: result.modelApplicabilityWarning ? T.yellow : result.risk?.score >= 60 ? T.red : result.score >= 65 ? T.green : result.score >= 45 ? T.yellow : T.red }}>{result.researchState || result.rating}</div>
                 <div style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>优先级 {result.rating} · 风险 {result.risk?.level || "待评估"}</div>
                 <div style={{ marginTop: 8 }}><ScoreGauge score={result.score} label="综合评分" size={80} /></div>
                 <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
@@ -1117,16 +1117,18 @@ export default function StockAnalysisTool() {
                 </div>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
-                <span><b style={{ color: T.green }}>≥70 积极关注</b> (Accumulate)</span>
-                <span><b style={{ color: T.yellow }}>55-69 持有观察</b> (Hold)</span>
-                <span><b style={{ color: T.orange }}>40-54 中性观察</b> (Neutral)</span>
-                <span><b style={{ color: T.red }}>&lt;40 谨慎回避</b> (Avoid)</span>
+                <span><b style={{ color: T.green }}>≥70 优先研究</b>（风险升高时改为严控风险或高风险观察）</span>
+                <span><b style={{ color: T.yellow }}>55-69 持有观察</b>（高风险时改为高风险等待）</span>
+                <span><b style={{ color: T.orange }}>&lt;55 中性观察</b>（高风险时改为暂不参与）</span>
               </div>
               <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
                 评分仅为研究排序参考，不构成投资建议。完整度只表示模型所需字段返回了多少，不代表数据绝对正确；缺失指标按中性处理并降低完整度。
               </div>
               <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
-                风险等级独立于综合评分，使用 Forward PE、20日年化波动、Beta、60日最大回撤和 SMA50 位置；它不会反向改写研究优先级。
+                风险分独立计算，不计入综合评分；它使用 Forward PE、20日年化波动、Beta、60日最大回撤和偏离 SMA50 的幅度连续计分，并与综合分共同生成研究状态。
+              </div>
+              <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
+                金融、银行、保险、REIT 等行业与普通经营型公司口径差异较大，统一显示“行业专项评估”；通用综合分只用于数据核对，不用于普通股票的优先级排序。
               </div>
             </div>
           </details>

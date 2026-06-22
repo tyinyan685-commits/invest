@@ -15,6 +15,18 @@ test("lower-risk high priority remains priority research", () => {
   assert.equal(researchState(75, risk), "优先研究");
 });
 
+test("borderline risk inputs receive gradual points instead of cliff effects", () => {
+  const risk = assessRisk({ fwdPe: 18.45, beta: 1.29, annualizedVolatility20: 34.3, maxDrawdown60: -8.36, latest: 1096.56, sma50: 973.87 });
+  assert.ok(risk.score > 0);
+  assert.ok(risk.score < 20);
+  assert.equal(risk.level, "低");
+});
+
+test("limited-applicability industries use a dedicated research state", () => {
+  const risk = assessRisk({ fwdPe: 18.45, beta: 1.29, annualizedVolatility20: 34.3, maxDrawdown60: -8.36, latest: 1096.56, sma50: 973.87 });
+  assert.equal(researchState(75, risk, { suitable: false }), "行业专项评估");
+});
+
 test("missing risk inputs reduce coverage without inventing flags", () => {
   const risk = assessRisk({ fwdPe: null, beta: null });
   assert.equal(risk.available, 0);

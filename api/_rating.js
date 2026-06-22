@@ -90,6 +90,19 @@ export function calculateTechnicalMetrics(rows) {
   };
 }
 
+function interpolatedRiskPoints(value, anchors) {
+  if (value <= anchors[0][0]) return anchors[0][1];
+  for (let index = 1; index < anchors.length; index += 1) {
+    const [upperValue, upperPoints] = anchors[index];
+    const [lowerValue, lowerPoints] = anchors[index - 1];
+    if (value <= upperValue) {
+      const position = (value - lowerValue) / (upperValue - lowerValue);
+      return lowerPoints + position * (upperPoints - lowerPoints);
+    }
+  }
+  return anchors.at(-1)[1];
+}
+
 export function assessRisk({ fwdPe, beta, annualizedVolatility20, maxDrawdown60, latest, sma50 } = {}) {
   let score = 0;
   let available = 0;
@@ -103,31 +116,33 @@ export function assessRisk({ fwdPe, beta, annualizedVolatility20, maxDrawdown60,
 
   if (pe !== null) {
     available += 1;
-    const points = pe >= 100 ? 30 : pe >= 60 ? 22 : pe >= 40 ? 12 : pe >= 30 ? 5 : 0;
+    const points = Math.round(interpolatedRiskPoints(pe, [[20, 0], [30, 5], [40, 12], [60, 22], [100, 30]]));
     score += points;
     if (points) flags.push({ metric: "Forward PE", value: pe, points, message: `Forward PE ${pe.toFixed(1)}x` });
   }
   if (volatility !== null) {
     available += 1;
-    const points = volatility >= 80 ? 25 : volatility >= 50 ? 15 : volatility >= 35 ? 8 : 0;
+    const points = Math.round(interpolatedRiskPoints(volatility, [[20, 0], [35, 8], [50, 15], [80, 25]]));
     score += points;
     if (points) flags.push({ metric: "20日年化波动", value: volatility, points, message: `20日年化波动 ${volatility.toFixed(1)}%` });
   }
   if (betaValue !== null) {
     available += 1;
-    const points = betaValue >= 2.5 ? 20 : betaValue >= 1.8 ? 12 : betaValue >= 1.3 ? 6 : 0;
+    const points = Math.round(interpolatedRiskPoints(betaValue, [[1, 0], [1.3, 6], [1.8, 12], [2.5, 20]]));
     score += points;
     if (points) flags.push({ metric: "Beta", value: betaValue, points, message: `Beta ${betaValue.toFixed(2)}` });
   }
   if (drawdown !== null) {
     available += 1;
-    const points = drawdown <= -30 ? 20 : drawdown <= -20 ? 12 : drawdown <= -12 ? 6 : 0;
+    const drawdownSeverity = Math.max(0, -drawdown);
+    const points = Math.round(interpolatedRiskPoints(drawdownSeverity, [[5, 0], [12, 6], [20, 12], [30, 20]]));
     score += points;
     if (points) flags.push({ metric: "60日最大回撤", value: drawdown, points, message: `60日最大回撤 ${drawdown.toFixed(1)}%` });
   }
   if (price !== null && average50 !== null) {
     available += 1;
-    const points = price < average50 ? 8 : 0;
+    const percentBelow = Math.max(0, ((average50 - price) / average50) * 100);
+    const points = Math.round(interpolatedRiskPoints(percentBelow, [[0, 0], [10, 8]]));
     score += points;
     if (points) flags.push({ metric: "价格/SMA50", value: "下方", points, message: "价格位于 SMA50 下方" });
   }
@@ -144,7 +159,8 @@ export function assessRisk({ fwdPe, beta, annualizedVolatility20, maxDrawdown60,
   };
 }
 
-export function researchState(score, risk) {
+export function researchState(score, risk, modelApplicability = { suitable: true }) {
+  if (modelApplicability?.suitable === false) return "行业专项评估";
   const riskScore = numberOrNull(risk?.score) ?? 0;
   if (score >= 70 && riskScore >= 60) return "高风险观察";
   if (score >= 70 && riskScore >= 35) return "优先研究，严控风险";
@@ -313,7 +329,7 @@ export function scoreRating({ fundamentals = {}, technical = {}, expectation = {
       sentiment: expectationResult
     },
     metricCompleteness: confidence,
-    modelVersion: "2026-06-22-v4"
+    modelVersion: "2026-06-22-v5"
   };
 }
 
