@@ -2,6 +2,11 @@ name: Production stock page smoke test
 
 on:
   workflow_dispatch:
+    inputs:
+      symbols:
+        description: "Optional comma-separated symbols; blank checks the full radar queue"
+        required: false
+        type: string
   schedule:
     - cron: "30 3 * * 2-6"
 
@@ -13,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Check radar candidates
+        env:
+          SMOKE_SYMBOLS: ${{ inputs.symbols }}
         run: bash scripts/smoke-production.sh

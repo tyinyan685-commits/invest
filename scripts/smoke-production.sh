@@ -15,10 +15,28 @@ curl --fail --silent --show-error --location \
   "$RADAR_HISTORY_URL" > "$history_json"
 
 symbols="$WORK_DIR/symbols.txt"
-{
-  printf '%s\n' ARM
-  jq -r '.candidates[]?.symbol // empty' "$history_json"
-} | awk 'NF && !seen[$0]++' > "$symbols"
+if [[ -n "${SMOKE_SYMBOLS:-}" ]]; then
+  printf '%s' "$SMOKE_SYMBOLS" | tr ', ' '\n\n' | awk 'NF && !seen[$0]++' > "$symbols"
+else
+  {
+    printf '%s\n' ARM
+    jq -r '.candidates[]?.symbol // empty' "$history_json"
+  } | awk 'NF && !seen[$0]++' > "$symbols"
+fi
+
+dump_page() {
+  local url="$1"
+  local page="$2"
+  shift 2
+  timeout 55s "$CHROME_BIN" \
+    --headless=new \
+    --no-sandbox \
+    --disable-gpu \
+    --disable-dev-shm-usage \
+    --virtual-time-budget=35000 \
+    "$@" \
+    --dump-dom "$url" > "$page" 2> "$WORK_DIR/chrome.log"
+}
 
 check_symbol() {
   local symbol="$1"
@@ -26,15 +44,15 @@ check_symbol() {
   page="$WORK_DIR/${symbol//[^A-Za-z0-9._-]/_}.html"
   url="$BASE_URL/?symbol=$symbol&smoke=1"
   echo "Checking $symbol"
-  if ! timeout 55s "$CHROME_BIN" \
-    --headless=new \
-    --no-sandbox \
-    --disable-gpu \
-    --disable-dev-shm-usage \
-    --virtual-time-budget=35000 \
-    --dump-dom "$url" > "$page" 2> "$WORK_DIR/chrome.log"; then
-    echo "$symbol: browser process failed or timed out"
-    return 1
+  if ! dump_page "$url" "$page"; then
+    echo "$symbol: browser process failed; retrying in compatibility mode"
+    if ! dump_page "$url" "$page" \
+      --js-flags=--jitless \
+      --disable-accelerated-2d-canvas \
+      --disable-software-rasterizer; then
+      echo "$symbol: browser process failed or timed out"
+      return 1
+    fi
   fi
   if ! grep -Eq "研究状态|最终评级" "$page"; then
     echo "$symbol: research state did not render"
