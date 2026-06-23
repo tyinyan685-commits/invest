@@ -894,6 +894,34 @@ export default function StockAnalysisTool() {
       if (unifiedRating.modelApplicability?.suitable === false) {
         analysis = { ...analysis, modelApplicabilityWarning: unifiedRating.modelApplicability.reason };
       }
+      const researchHighlights = [];
+      if (analysis.fin.fwdPE != null) {
+        researchHighlights.push({
+          t: "估值预测期",
+          d: `下一财年 PE ${analysis.fin.fwdPE.toFixed(1)}x，预测期 ${analysis.fin.estimateDate || "未返回"}；该数值取决于分析师 EPS 一致预期。`
+        });
+      }
+      if (analysis.fin.revG != null || analysis.fin.niG != null) {
+        researchHighlights.push({
+          t: "TTM 经营变化",
+          d: `营收同比 ${analysis.fin.revG == null ? "N/A" : pct(analysis.fin.revG)}，净利润同比 ${analysis.fin.niG == null ? "N/A" : pct(analysis.fin.niG)}${analysis.fin.ni != null && analysis.fin.ni <= 0 ? "，公司仍处于亏损状态" : ""}。`
+        });
+      }
+      researchHighlights.push({
+        t: "技术面状态",
+        d: `RSI ${analysis.tech.rsi.toFixed(1)}，MACD ${analysis.tech.macd > analysis.tech.signal ? "位于信号线上方" : "位于信号线下方"}，价格${analysis.price > analysis.tech.sma50 ? "高于" : "低于"} SMA50。`
+      });
+      if (analysis.fin.freeCashFlow != null) {
+        researchHighlights.push({
+          t: "现金流",
+          d: `TTM 自由现金流 ${analysis.cur}${fmt(analysis.fin.freeCashFlow)}，最近披露债务/权益 ${analysis.fin.debtToEquity == null ? "N/A" : analysis.fin.debtToEquity.toFixed(1) + "%"}。`
+        });
+      }
+      analysis = {
+        ...analysis,
+        bulls: researchHighlights.slice(0, 3),
+        verdict: `${analysis.name} 当前统一评分 ${unified.score}，研究状态为“${unifiedRating.researchState || unified.rating}”，风险等级为“${unifiedRating.metrics?.risk?.level || "未返回"}”。该状态用于研究排序，不等同于买入建议。`
+      };
       status.push({
         name: "统一评级",
         ok: unified.confidence >= 50,
@@ -1204,7 +1232,7 @@ export default function StockAnalysisTool() {
                   <SectionTitle icon="&#x1F4CB;">核心判断</SectionTitle>
                   <p style={{ fontSize: 14, lineHeight: 1.8, color: T.text, margin: 0 }}>{result.verdict}</p>
                   <div style={{ marginTop: 14 }}>
-                    <div style={{ fontSize: 12, color: T.muted, marginBottom: 6 }}>三条看多理由</div>
+                    <div style={{ fontSize: 12, color: T.muted, marginBottom: 6 }}>三条研究线索</div>
                     {result.bulls.map((b, i) => (
                       <div key={i} style={{ fontSize: 13, color: T.text, padding: "6px 0", borderBottom: i < 2 ? `1px solid ${T.border}` : "none" }}>
                         <span style={{ color: T.green, fontWeight: 700, marginRight: 6 }}>{i + 1}.</span>
