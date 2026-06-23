@@ -1,5 +1,15 @@
 import { FMP_KEY, FMP_BASE, setCORS, validateSymbol } from "./_lib.js";
 
+export function ytdReference(bars, year) {
+  const chronological = [...(Array.isArray(bars) ? bars : [])]
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const yearStart = `${year}-01-01`;
+  const priorYearClose = chronological.filter((bar) => bar.date < yearStart).at(-1) || null;
+  const firstCurrentYearClose = chronological.find((bar) => bar.date >= yearStart) || null;
+  const reference = priorYearClose || firstCurrentYearClose;
+  return { price: reference?.close ?? null, date: reference?.date ?? null };
+}
+
 export default async function handler(req, res) {
   const { symbol } = req.query;
   const err = validateSymbol(symbol);
@@ -23,19 +33,13 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: false, error: data?.["Error Message"] || "No historical data" });
     }
 
-    const trimmed = bars.slice(0, 300).reverse();
+    const chronological = [...bars].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const trimmed = chronological.slice(-300);
 
     const now = new Date();
-    const yearStart = `${now.getFullYear()}-01-02`;
-    let yearStartPrice = null;
-    for (const bar of trimmed) {
-      if (bar.date >= yearStart) { yearStartPrice = bar.close; break; }
-    }
-    if (!yearStartPrice) {
-      for (const bar of bars) {
-        if (bar.date >= yearStart) { yearStartPrice = bar.close; break; }
-      }
-    }
+    const ytd = ytdReference(chronological, now.getFullYear());
+    const yearStartPrice = ytd.price;
+    const yearStartDate = ytd.date;
 
     const compactBars = trimmed.map(d => ({
       date: d.date, open: d.open, high: d.high, low: d.low, close: d.close, volume: d.volume,
@@ -43,7 +47,7 @@ export default async function handler(req, res) {
 
     setCORS(res);
     res.status(200).json({
-      ok: true, count: compactBars.length, bars: compactBars, yearStartPrice,
+      ok: true, count: compactBars.length, bars: compactBars, yearStartPrice, yearStartDate,
       source: "FMP historical-price-eod/full",
     });
   } catch (e) {

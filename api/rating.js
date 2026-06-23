@@ -1,5 +1,5 @@
 import { FMP_BASE, FMP_KEY, fetchJSONArray, setCORS, validateSymbol } from "./_lib.js";
-import { assessRisk, calculateTechnicalMetrics, forwardPeMetric, numberOrNull, researchState, scoreRating } from "./_rating.js";
+import { aggregateTtmIncome, assessRisk, calculateTechnicalMetrics, forwardPeMetric, nextFiscalYearEstimate, numberOrNull, researchState, scoreRating } from "./_rating.js";
 
 function first(value) {
   return Array.isArray(value) ? value[0] || {} : value || {};
@@ -109,17 +109,6 @@ function classifyNews(stockNews, pressReleases) {
   };
 }
 
-function nextAnalystEstimate(estimates, latestFiscalDate) {
-  const cutoff = String(latestFiscalDate || "");
-  const candidate = (Array.isArray(estimates) ? estimates : [])
-    .filter((row) => numberOrNull(row.estimatedEpsAvg ?? row.epsAvg) !== null)
-    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))
-    .find((row) => !cutoff || String(row.date || "") > cutoff) || null;
-  if (!candidate?.date || !latestFiscalDate) return candidate;
-  const horizonDays = Math.round((new Date(candidate.date) - new Date(latestFiscalDate)) / 86400000);
-  return horizonDays > 0 && horizonDays <= 550 ? { ...candidate, horizonDays } : null;
-}
-
 async function loadSentiment(symbol) {
   try {
     const response = await fetch(`https://api.stocktwits.com/api/2/streams/symbol/${encodeURIComponent(symbol)}.json`, {
@@ -157,41 +146,44 @@ export default async function handler(req, res) {
     const encoded = encodeURIComponent(symbol);
     const urls = {
       profile: `${FMP_BASE}/profile?symbol=${encoded}&apikey=${FMP_KEY}`,
-      quote: `${FMP_BASE}/quote?symbol=${encoded}&apikey=${FMP_KEY}`,
       income: `${FMP_BASE}/income-statement?symbol=${encoded}&period=annual&limit=3&apikey=${FMP_KEY}`,
+      quarterlyIncome: `${FMP_BASE}/income-statement?symbol=${encoded}&period=quarter&limit=8&apikey=${FMP_KEY}`,
       metrics: `${FMP_BASE}/key-metrics-ttm?symbol=${encoded}&apikey=${FMP_KEY}`,
       estimates: `${FMP_BASE}/analyst-estimates?symbol=${encoded}&period=annual&limit=10&apikey=${FMP_KEY}`,
       history: `${FMP_BASE}/historical-price-eod/full?symbol=${encoded}&apikey=${FMP_KEY}`,
-      pressReleases: `${FMP_BASE}/news/press-releases?symbols=${encoded}&limit=8&apikey=${FMP_KEY}`
+      stockNews: `${FMP_BASE}/news/stock?symbols=${encoded}&limit=8&apikey=${FMP_KEY}`
     };
-    const [profiles, quotes, incomeRows, metricRows, estimates, historyValue, sentiment, expectationHistory, pressReleases] = await Promise.all([
+    const [profiles, incomeRows, quarterlyIncomeRows, metricRows, estimates, historyValue, sentiment, expectationHistory, stockNews] = await Promise.all([
       fetchJSONArray(urls.profile),
-      fetchJSONArray(urls.quote),
       fetchJSONArray(urls.income),
+      fetchJSONArray(urls.quarterlyIncome),
       fetchJSONArray(urls.metrics),
       fetchJSONArray(urls.estimates),
       fetch(urls.history, { signal: AbortSignal.timeout(15000) }).then((response) => response.json()).catch(() => []),
       loadSentiment(symbol),
       loadExpectationHistory(symbol),
-      fetchJSONArray(urls.pressReleases)
+      fetchJSONArray(urls.stockNews)
     ]);
 
     const profile = first(profiles);
-    const quote = first(quotes);
-    const latestIncome = incomeRows[0] || {};
-    const priorIncome = incomeRows[1] || {};
+    const sortedAnnualIncome = [...incomeRows].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    const latestIncome = sortedAnnualIncome[0] || {};
+    const priorIncome = sortedAnnualIncome[1] || {};
+    const ttm = aggregateTtmIncome(quarterlyIncomeRows);
+    const currentStatement = ttm.current || latestIncome;
+    const priorStatement = ttm.prior || priorIncome;
     const metrics = first(metricRows);
-    const analystEstimate = nextAnalystEstimate(estimates, latestIncome.date);
+    const analystEstimate = nextFiscalYearEstimate(estimates, latestIncome.date);
     const history = normalizeHistory(historyValue);
     const technical = calculateTechnicalMetrics(history);
-    const price = numberOrNull(quote.price ?? profile.price ?? technical.latest);
+    const price = numberOrNull(profile.price ?? technical.latest);
     const epsEstimate = numberOrNull(analystEstimate?.estimatedEpsAvg ?? analystEstimate?.epsAvg);
     const forwardPe = forwardPeMetric(price, epsEstimate);
-    const revenue = numberOrNull(latestIncome.revenue);
-    const priorRevenue = numberOrNull(priorIncome.revenue);
-    const netIncome = numberOrNull(latestIncome.netIncome);
-    const priorNetIncome = numberOrNull(priorIncome.netIncome);
-    const grossProfit = numberOrNull(latestIncome.grossProfit);
+    const revenue = numberOrNull(currentStatement.revenue);
+    const priorRevenue = numberOrNull(priorStatement.revenue);
+    const netIncome = numberOrNull(currentStatement.netIncome);
+    const priorNetIncome = numberOrNull(priorStatement.netIncome);
+    const grossProfit = numberOrNull(currentStatement.grossProfit);
     const roeRaw = numberOrNull(metrics.returnOnEquityTTM);
     const fundamentals = {
       fwdPe: forwardPe.value,
@@ -199,16 +191,19 @@ export default async function handler(req, res) {
       fwdPeSource: forwardPe.value === null ? null : "FMP analyst-estimates",
       epsEstimate,
       estimateDate: analystEstimate?.date || null,
+      estimateType: analystEstimate?.estimateType || null,
       estimateHorizonDays: analystEstimate?.horizonDays ?? null,
       revenueGrowth: growth(revenue, priorRevenue),
       netIncomeGrowth: growth(netIncome, priorNetIncome),
+      netIncome,
       roe: roeRaw === null ? null : roeRaw * 100,
       grossMargin: ratioPercent(grossProfit, revenue),
-      fiscalDate: latestIncome.date || null
+      fiscalDate: currentStatement.date || null,
+      fiscalPeriod: ttm.current ? "TTM" : latestIncome.period || null
     };
     const expectation = {
       analystRevision: analystRevision(epsEstimate, fundamentals.estimateDate, expectationHistory),
-      news: classifyNews([], pressReleases)
+      news: classifyNews(stockNews, [])
     };
     const applicability = modelApplicability(profile);
     const calculatedRating = scoreRating({ fundamentals, technical, expectation, sentiment });
@@ -217,7 +212,7 @@ export default async function handler(req, res) {
       : { ...calculatedRating, rating: "模型适用性有限", ratingEn: "Limited applicability" };
     const risk = assessRisk({
       fwdPe: fundamentals.fwdPe,
-      beta: profile.beta ?? quote.beta,
+      beta: profile.beta,
       annualizedVolatility20: technical.annualizedVolatility20,
       maxDrawdown60: technical.maxDrawdown60,
       latest: technical.latest,
@@ -231,7 +226,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       symbol,
-      name: profile.companyName || quote.name || symbol,
+      name: profile.companyName || symbol,
       price,
       currency: profile.currency || null,
       generatedAt,
@@ -243,15 +238,18 @@ export default async function handler(req, res) {
         marketAndFinancials: "Financial Modeling Prep",
         sentiment: sentiment.source,
         analystRevisionHistory: "Supabase daily rating snapshots",
-        newsSignal: "FMP company press releases",
+        newsSignal: "FMP stock news",
         priceAsOf: technical.latestDate,
         fiscalAsOf: fundamentals.fiscalDate,
         estimateAsOf: fundamentals.estimateDate,
+        estimateType: fundamentals.estimateType,
+        fiscalPeriod: fundamentals.fiscalPeriod,
+        technicalAsOf: technical.latestDate,
         analystReferenceAsOf: expectation.analystRevision?.referenceDate || null,
         newsAsOf: expectation.news?.latestArticleDate || null,
         ratingGeneratedAt: generatedAt
       },
-      dataPolicy: "仅使用真实接口返回值；分析师修订必须有至少7天同预测期快照；新闻仅对明确事件短语定向；社交情绪使用中性先验收缩。缺失项按中性处理并降低指标完整度。"
+      dataPolicy: "财务与增长优先使用最近四季TTM，Forward PE使用下一财年一致预期；仅使用真实接口返回值。分析师修订必须有至少7天同预测期快照；新闻仅对明确事件短语定向；社交情绪使用中性先验收缩。缺失项按中性处理并降低指标完整度。"
     });
   } catch (error) {
     setCORS(res);

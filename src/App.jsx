@@ -28,8 +28,15 @@ const sma = (arr, p) => {
   return r;
 };
 const ema = (arr, p) => {
-  const k = 2 / (p + 1), r = [arr[0]];
-  for (let i = 1; i < arr.length; i++) r.push(+(arr[i] * k + r[i - 1] * (1 - k)).toFixed(2));
+  const r = new Array(arr.length).fill(null);
+  if (arr.length < p) return r;
+  const k = 2 / (p + 1);
+  let current = arr.slice(0, p).reduce((sum, value) => sum + value, 0) / p;
+  r[p - 1] = +current.toFixed(4);
+  for (let i = p; i < arr.length; i++) {
+    current = arr[i] * k + current * (1 - k);
+    r[i] = +current.toFixed(4);
+  }
   return r;
 };
 const calcRSI = (closes, p = 14) => {
@@ -39,27 +46,37 @@ const calcRSI = (closes, p = 14) => {
     gains.push(Math.max(d, 0)); losses.push(Math.max(-d, 0));
   }
   const rsis = new Array(closes.length).fill(null);
-  for (let i = p - 1; i < gains.length; i++) {
-    const ag = gains.slice(i - p + 1, i + 1).reduce((a, b) => a + b, 0) / p;
-    const al = losses.slice(i - p + 1, i + 1).reduce((a, b) => a + b, 0) / p;
+  if (gains.length < p) return rsis;
+  let ag = gains.slice(0, p).reduce((a, b) => a + b, 0) / p;
+  let al = losses.slice(0, p).reduce((a, b) => a + b, 0) / p;
+  rsis[p] = al === 0 ? 100 : +(100 - 100 / (1 + ag / al)).toFixed(1);
+  for (let i = p; i < gains.length; i++) {
+    ag = (ag * (p - 1) + gains[i]) / p;
+    al = (al * (p - 1) + losses[i]) / p;
     rsis[i + 1] = al === 0 ? 100 : +(100 - 100 / (1 + ag / al)).toFixed(1);
   }
   return rsis;
 };
 const calcMACD = (closes) => {
   const e12 = ema(closes, 12), e26 = ema(closes, 26);
-  const line = e12.map((v, i) => +(v - e26[i]).toFixed(3));
-  const sigLine = ema(line.slice(25), 9);
-  const sig = Array(25).fill(null).concat(sigLine);
-  return { line, signal: sig, hist: line.map((v, i) => sig[i] != null ? +(v - sig[i]).toFixed(3) : 0) };
+  const line = e12.map((value, index) => value === null || e26[index] === null ? null : +(value - e26[index]).toFixed(4));
+  const firstValid = line.findIndex((value) => value !== null);
+  const sigLine = firstValid < 0 ? [] : ema(line.slice(firstValid), 9);
+  const sig = new Array(closes.length).fill(null);
+  sigLine.forEach((value, index) => { sig[firstValid + index] = value; });
+  return { line, signal: sig, hist: line.map((value, index) => value !== null && sig[index] !== null ? +(value - sig[index]).toFixed(4) : null) };
 };
 const calcATR = (data, p = 14) => {
   const tr = data.map((d, i) =>
     i === 0 ? d.high - d.low : Math.max(d.high - d.low, Math.abs(d.high - data[i - 1].close), Math.abs(d.low - data[i - 1].close))
   );
-  const r = []; for (let i = 0; i < tr.length; i++) {
-    if (i < p) { r.push(null); continue; }
-    r.push(+(tr.slice(i - p + 1, i + 1).reduce((a, b) => a + b, 0) / p).toFixed(2));
+  const r = new Array(tr.length).fill(null);
+  if (tr.length < p) return r;
+  let current = tr.slice(0, p).reduce((a, b) => a + b, 0) / p;
+  r[p - 1] = +current.toFixed(2);
+  for (let i = p; i < tr.length; i++) {
+    current = (current * (p - 1) + tr[i]) / p;
+    r[i] = +current.toFixed(2);
   }
   return r;
 };
@@ -358,9 +375,9 @@ function runAnalysis(ticker, stockData, dataSource) {
   // Real SMA200 — use actual 200-day average if enough data, else use all available
   const curSMA200 = sma200arr.filter(v => v !== null).pop() || null;
 
-  const curMACD = macd.line[macd.line.length - 1];
-  const curSignal = macd.signal[macd.signal.length - 1];
-  const macdHist = macd.hist[macd.hist.length - 1];
+  const curMACD = macd.line.at(-1);
+  const curSignal = macd.signal.at(-1);
+  const macdHist = macd.hist.at(-1);
   const avgVol = prices.slice(-20).reduce((s, d) => s + d.volume, 0) / 20;
 
   // If real history data, compute real 52-week high/low from actual prices
@@ -702,7 +719,7 @@ export default function StockAnalysisTool() {
     }
 
     // 4. Fetch external data (sentiment, macro, news, financials, history) in parallel
-    status.push({ name: "FMP 行情", ok: dataSource === "live", level: dataSource === "live" ? "complete" : "degraded", note: dataSource === "live" ? "实时价格/52周/市值" : "预设数据(可能过时)" });
+    status.push({ name: "FMP 行情", ok: dataSource === "live", level: dataSource === "live" ? "complete" : "degraded", note: dataSource === "live" ? "FMP 行情快照/52周/市值" : "预设数据(可能过时)" });
 
     const [sent, mac, nws, fin, hist, evts, unifiedRating, iv] = await Promise.all([
       supplemental.sentiment,
@@ -772,30 +789,30 @@ export default function StockAnalysisTool() {
     status.push({ name: "新闻", ok: nws.ok, level: nws.ok ? (nws.total > 5 ? "complete" : "degraded") : "missing", note: nws.ok ? `${nws.total}条相关新闻` : nws.error });
 
     // 5. Merge real financials into analysis if available
-    if (fin.ok && fin.eps != null && analysis.price > 0) {
+    if (fin.ok && analysis.price > 0) {
       setFinData(fin);
       // PE is only meaningful when EPS > 0; null otherwise (display as N/A)
       const realPE = fin.eps > 0 ? +(analysis.price / fin.eps).toFixed(1) : null;
-      const fwdEPS = fin.eps * (1 + (fin.epsGrowth || 0) / 100);
-      const realFwdPE = fwdEPS > 0 ? +(analysis.price / fwdEPS).toFixed(1) : null;
-      // PB: prefer direct balance-sheet calculation; fall back to ROE-derived
+      // Forward PE is supplied only by the unified rating endpoint's next-fiscal-year consensus.
+      const realFwdPE = null;
       const bookValuePS = (fin.totalEquity && fin.shares && fin.shares > 0)
         ? fin.totalEquity / fin.shares
-        : ((fin.roe > 0 && fin.eps > 0) ? (fin.eps / (fin.roe / 100)) : 0);
-      const realPB = bookValuePS > 0 ? +(analysis.price / bookValuePS).toFixed(1) : 0;
+        : null;
+      const realPB = bookValuePS > 0 ? +(analysis.price / bookValuePS).toFixed(1) : null;
 
       // Override fin data in analysis result — use real balance sheet / cash flow where available
       const updatedFin = {
         ...analysis.fin,
         pe: realPE,
         fwdPE: realFwdPE,
-        pb: realPB || analysis.fin.pb,
+        pb: realPB,
         rev: fin.revenue,
         revG: fin.revenueGrowth,
         ni: fin.netIncome,
         niG: fin.niGrowth,
         gm: fin.grossMargin,
         nm: fin.netMargin,
+        operatingMargin: fin.operatingMargin,
         roe: fin.roe,
         epsGrowth: fin.epsGrowth ?? null,
         // Real data from balance sheet / cash flow (null if unavailable — never fabricate)
@@ -829,7 +846,10 @@ export default function StockAnalysisTool() {
         const newSub = scoreToSub(newScore);
         analysis = { ...analysis, score: newScore, rating: newRating, sub: newSub };
       }
-      status.push({ name: "财务报表", ok: true, level: fin.quarters?.length >= 4 ? "complete" : fin.eps > 0 ? "degraded" : "degraded", note: `PE ${realPE != null ? realPE + "x" : "N/A(亏损)"}, 营收 ${fmt(fin.revenue)}, EPS ${analysis.cur}${fin.eps.toFixed(2)}${fin.operatingCF ? ", OCF " + fmt(fin.operatingCF) : ""}${fin.cash ? ", 现金 " + fmt(fin.cash) : ""}${fin.quarters?.length < 4 ? " (季报数据不完整)" : ""}` });
+      const financialCoverage = fin.dataCompleteness?.total
+        ? fin.dataCompleteness.available / fin.dataCompleteness.total
+        : 0;
+      status.push({ name: "财务报表", ok: financialCoverage >= 0.5, level: financialCoverage >= 0.8 ? "complete" : financialCoverage >= 0.5 ? "degraded" : "missing", note: `字段 ${fin.dataCompleteness?.available ?? 0}/${fin.dataCompleteness?.total ?? 9}；TTM PE ${realPE != null ? realPE + "x" : fin.eps == null ? "N/A(EPS缺失)" : "N/A(亏损)"}, TTM营收 ${fmt(fin.revenue)}, TTM EPS ${fin.eps == null ? "N/A" : analysis.cur + fin.eps.toFixed(2)}${fin.operatingCF != null ? ", OCF " + fmt(fin.operatingCF) : ""}${fin.cash != null ? ", 现金 " + fmt(fin.cash) : ""}${fin.quarters?.length < 4 ? " (季报数据不完整)" : ""}` });
       if (fin.analystTarget?.avgTarget) {
         status.push({ name: "分析师预测", ok: true, level: fin.analystTarget.count >= 5 ? "complete" : "degraded", note: `${fin.analystTarget.count}位分析师, 均价 ${analysis.cur}${fin.analystTarget.avgTarget.toFixed(1)}${fin.analystTarget.count < 5 ? " (覆盖较少)" : ""}` });
       } else {
@@ -849,7 +869,7 @@ export default function StockAnalysisTool() {
         ...analysis,
         fin: {
           ...analysis.fin,
-          fwdPE: unifiedFundamentals.fwdPe ?? analysis.fin?.fwdPE ?? null,
+          fwdPE: unifiedFundamentals.fwdPe ?? null,
           fwdPESource: unifiedFundamentals.fwdPeSource || null,
           fwdPEReason: unifiedFundamentals.fwdPeReason || null,
           estimateDate: unifiedFundamentals.estimateDate || null
@@ -939,7 +959,7 @@ export default function StockAnalysisTool() {
         <span style={{ fontSize: mob ? 18 : 22, fontWeight: 800, color: T.blue }}>StockAnalyzer</span>
         <span style={{ fontSize: 12, color: T.dim, background: T.card, padding: "2px 8px", borderRadius: 4 }}>v2.1</span>
         <span style={{ fontSize: 11, color: T.dim }}>多维度股票监测评估系统</span>
-        {result && <Badge text={result.dataSource === "live" ? (result.finSource === "live" ? "实时行情 + 实时财务" : result.fin?.finAvailable === "preset" ? "实时行情 + 预设财务(参考)" : "实时行情 · 财务数据不可用") : "演示数据"} color={result.dataSource === "live" ? (result.finSource === "live" ? T.green : result.fin?.finAvailable === "preset" ? T.yellow : T.red) : T.red} />}
+        {result && <Badge text={result.dataSource === "live" ? (result.finSource === "live" ? "行情快照 + 最新披露财务" : result.fin?.finAvailable === "preset" ? "行情快照 + 预设财务(参考)" : "行情快照 · 财务数据不可用") : "演示数据"} color={result.dataSource === "live" ? (result.finSource === "live" ? T.green : result.fin?.finAvailable === "preset" ? T.yellow : T.red) : T.red} />}
       </div>
 
       {/* SEARCH */}
@@ -988,7 +1008,7 @@ export default function StockAnalysisTool() {
         <Card style={{ textAlign: "center", padding: 40 }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>&#x1F50D;</div>
           <div style={{ fontSize: 16, color: T.muted }}>输入股票代码开始分析</div>
-          <div style={{ fontSize: 12, color: T.dim, marginTop: 6 }}>已配置 FMP API Key，支持美股+港股任意标的实时分析</div>
+          <div style={{ fontSize: 12, color: T.dim, marginTop: 6 }}>已配置 FMP API，行情使用最新快照，财务使用最近披露</div>
         </Card>
       )}
 
@@ -999,9 +1019,9 @@ export default function StockAnalysisTool() {
           <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
             {result.dataSource === "live" ? (
               <div style={{ padding: "6px 14px", borderRadius: 8, background: T.green + "15", border: `1px solid ${T.green}33`, fontSize: 12, color: T.green }}>
-                实时行情 · FMP API · 价格/52周/市值/成交量为真实数据
-                {result.finSource === "live" ? " · 财务指标来自 FMP 实时报表" : " · 财务指标来自预设库(参考值,请以财报为准)"}
-                {result.historySource === "live" ? ` · ${result.tech.historyLen}天真实K线` : " · ⚠ 技术指标基于模拟K线"}
+                FMP 行情快照 · 价格/52周/市值/成交量
+                {result.finSource === "live" ? " · 财务指标来自 FMP 最新披露" : " · 财务指标不可用（不使用预设值）"}
+                {result.historySource === "live" ? ` · ${result.tech.historyLen}天真实K线` : " · 技术指标不可用"}
                 · {new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}
               </div>
             ) : (
@@ -1061,9 +1081,9 @@ export default function StockAnalysisTool() {
                 )}
                 {result.sourceDates && (
                   <div style={{ display: "flex", gap: 12, marginTop: 6, fontSize: 10, color: T.dim, flexWrap: "wrap" }}>
-                    <span>价格截至 {result.sourceDates.priceAsOf || "未返回"}</span>
-                    <span>财报截至 {result.sourceDates.fiscalAsOf || "未返回"}</span>
-                    <span>预测期 {result.sourceDates.estimateAsOf || "未返回"}</span>
+                    <span>技术行情截至 {result.sourceDates.technicalAsOf || result.sourceDates.priceAsOf || "未返回"}</span>
+                    <span>财务期间 {result.sourceDates.fiscalPeriod || "未返回"}，截至 {result.sourceDates.fiscalAsOf || "未返回"}</span>
+                    <span>下一财年预测期 {result.sourceDates.estimateAsOf || "未返回"}</span>
                     <span>新闻截至 {result.sourceDates.newsAsOf || "未返回"}</span>
                     <span>评级生成 {result.sourceDates.ratingGeneratedAt ? new Date(result.sourceDates.ratingGeneratedAt).toLocaleString() : "未返回"}</span>
                   </div>
@@ -1100,9 +1120,9 @@ export default function StockAnalysisTool() {
               <div style={{ display: "flex", gap: mob ? 8 : 20, flexWrap: "wrap", marginBottom: 10 }}>
                 <div style={{ flex: "1 1 180px", background: T.cardAlt, padding: "8px 12px", borderRadius: 6 }}>
                   <b style={{ color: T.blue }}>基本面（45%）</b><br />
-                  <span style={{ color: T.dim }}>FwdPE &lt;20 +15 / &lt;30 +5 / ≥30 -10<br />
-                  营收增速 &gt;30% +15 / &gt;10% +8 / 否则 -5<br />
-                  净利润增速 &gt;30% +10 / &gt;0 +5 / 否则 -10<br />
+                  <span style={{ color: T.dim }}>下一财年PE &lt;20 +15 / &lt;30 +5 / ≥30 -10<br />
+                  TTM营收同比 &gt;30% +15 / &gt;10% +8 / 否则 -5<br />
+                  TTM净利润同比 &gt;30% +10 / &gt;0 +5 / 否则 -10；仍亏损不加增长分<br />
                   ROE &gt;25% +10 / &gt;15% +5<br />
                   毛利率 &gt;50% +5</span>
                 </div>
@@ -1132,7 +1152,7 @@ export default function StockAnalysisTool() {
                 评分指标完整度低于50%时，研究状态固定为“数据不足，暂缓判断”，不会因部分指标高分进入优先队列。
               </div>
               <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
-                风险分独立计算，不计入综合评分；它使用 Forward PE、20日年化波动、Beta、60日最大回撤和偏离 SMA50 的幅度连续计分，并与综合分共同生成研究状态。
+                风险分独立计算，不计入综合评分；它使用下一财年PE、20日年化波动、Beta、60日最大回撤和偏离 SMA50 的幅度连续计分，并与综合分共同生成研究状态。
               </div>
               <div style={{ fontSize: 10, color: T.dim, marginTop: 4 }}>
                 金融、银行、保险、REIT 等行业与普通经营型公司口径差异较大，统一显示“行业专项评估”；通用综合分只用于数据核对，不用于普通股票的优先级排序。
@@ -1148,7 +1168,7 @@ export default function StockAnalysisTool() {
           {/* ═══ OVERVIEW ═══ */}
           <div style={{ display: tab === "overview" ? "block" : "none" }}>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-                <MetricCard label="Forward PE" value={result.fin.fwdPE != null ? result.fin.fwdPE.toFixed(1) + "x" : "N/A"} sub={result.fin.fwdPE != null ? `行业 ${result.peers[2]?.pe || "-"}x` : result.fin.fwdPEReason || "接口未返回可用预测"} color={result.fin.fwdPE != null && result.fin.fwdPE < 25 ? T.green : result.fin.fwdPE != null ? T.yellow : T.dim} highlight={T.blue} />
+                <MetricCard label="下一财年 PE" value={result.fin.fwdPE != null ? result.fin.fwdPE.toFixed(1) + "x" : "N/A"} sub={result.fin.fwdPE != null ? `预测期 ${result.fin.estimateDate || "未返回"}` : result.fin.fwdPEReason || "接口未返回下一财年预测"} color={result.fin.fwdPE != null && result.fin.fwdPE < 25 ? T.green : result.fin.fwdPE != null ? T.yellow : T.dim} highlight={T.blue} />
                 <MetricCard label="营收增速" value={result.fin.revG != null ? pct(result.fin.revG) : "N/A"} sub={`净利润 ${result.fin.niG != null ? pct(result.fin.niG) : "N/A"}`} color={result.fin.revG > 20 ? T.green : result.fin.revG > 0 ? T.yellow : result.fin.revG != null ? T.red : T.dim} highlight={T.green} />
                 <MetricCard label="RSI (14)" value={result.tech.rsi.toFixed(1)} sub={result.tech.rsi > 55 ? "偏多动能" : result.tech.rsi < 45 ? "偏弱" : "中性区间"} color={result.tech.rsi > 70 ? T.red : result.tech.rsi > 55 ? T.green : T.yellow} highlight={T.purple} />
                 <MetricCard label="MACD" value={result.tech.macd > result.tech.signal ? "金叉" : "死叉"} sub={`柱状 ${result.tech.hist > 0 ? "+" : ""}${result.tech.hist.toFixed(3)}`} color={result.tech.macd > result.tech.signal ? T.green : T.red} highlight={T.orange} />
@@ -1308,17 +1328,17 @@ export default function StockAnalysisTool() {
           <div style={{ display: tab === "fundamental" ? "block" : "none" }}>
               {result.finSource !== "live" && (
                 <div style={{ padding: "10px 14px", borderRadius: 8, background: T.yellow + "18", border: `1px solid ${T.yellow}44`, fontSize: 13, color: T.yellow, marginBottom: 16, lineHeight: 1.7 }}>
-                  &#x26A0;&#xFE0F; <b>以下财务指标为预设参考值，未经实时财报验证，可能不准确！</b>
-                  <br />请以公司最新财报（10-K/10-Q/年报）为准。如需实时数据，请升级 FMP 付费套餐。
+                  <b>财务接口当前未返回完整数据。</b>
+                  <br />缺失项保持 N/A，不使用预设或推算值代替；请以公司最新财报（10-K/10-Q/年报）为准。
                 </div>
               )}
               <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
                 <Card style={{ flex: "1 1 320px", minWidth: 280 }}>
-                  <SectionTitle icon="&#x1F4B0;">估值指标 {result.finSource === "live" ? <Badge text="实时数据" color={T.green} /> : result.fin?.finAvailable === "preset" ? <Badge text="预设参考值" color={T.yellow} /> : <Badge text="数据不可用" color={T.red} />}</SectionTitle>
+                  <SectionTitle icon="&#x1F4B0;">估值指标 {result.finSource === "live" ? <Badge text="最新披露" color={T.green} /> : result.fin?.finAvailable === "preset" ? <Badge text="预设参考值" color={T.yellow} /> : <Badge text="数据不可用" color={T.red} />}</SectionTitle>
                   <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 10 }}>
                     {[
                       { l: "PE (TTM)", v: result.fin.pe != null ? result.fin.pe + "x" : "N/A", sub: result.fin.pe == null && result.finSource === "live" ? "公司当前亏损" : null },
-                      { l: "Forward PE", v: fixed(result.fin.fwdPE, 1, "x"), hl: T.blue, sub: result.fin.fwdPE == null && result.finSource === "live" ? "前瞻EPS仍为负" : null },
+                      { l: "下一财年 PE", v: fixed(result.fin.fwdPE, 1, "x"), hl: T.blue, sub: result.fin.fwdPE == null && result.finSource === "live" ? (result.fin.fwdPEReason || "下一财年预测不可用") : `预测期 ${result.fin.estimateDate || "未返回"}` },
                       { l: "PB", v: result.fin.pb != null ? result.fin.pb + "x" : "N/A" },
                       { l: "股息率", v: fixed(result.fin.divY, 2, "%") },
                       { l: "ROE", v: fixed(result.fin.roe, 1, "%") },
@@ -1346,40 +1366,44 @@ export default function StockAnalysisTool() {
                   </div>
                 </Card>
                 <Card style={{ flex: "1 1 320px", minWidth: 280 }}>
-                  <SectionTitle icon="&#x1F4CA;">增长与盈利 {result.finSource === "live" ? <Badge text="实时" color={T.green} /> : result.fin?.finAvailable === "preset" ? <Badge text="参考值" color={T.yellow} /> : null}</SectionTitle>
+                  <SectionTitle icon="&#x1F4CA;">增长与盈利 {result.finSource === "live" ? <Badge text="TTM / 最新披露" color={T.green} /> : result.fin?.finAvailable === "preset" ? <Badge text="参考值" color={T.yellow} /> : null}</SectionTitle>
                   <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 10 }}>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>营收</div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.rev ? result.cur + fmt(result.fin.rev) : "N/A"}</div>
-                      <div style={{ fontSize: 12, color: result.fin.revG > 0 ? T.green : result.fin.revG < 0 ? T.red : T.dim }}>{result.fin.revG ? pct(result.fin.revG) : "—"}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.rev != null ? result.cur + fmt(result.fin.rev) : "N/A"}</div>
+                      <div style={{ fontSize: 12, color: result.fin.revG > 0 ? T.green : result.fin.revG < 0 ? T.red : T.dim }}>{result.fin.revG != null ? pct(result.fin.revG) : "—"}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>净利润</div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.ni ? result.cur + fmt(result.fin.ni) : "N/A"}</div>
-                      <div style={{ fontSize: 12, color: result.fin.niG > 0 ? T.green : result.fin.niG < 0 ? T.red : T.dim }}>{result.fin.niG ? pct(result.fin.niG) : "—"}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.ni != null ? result.cur + fmt(result.fin.ni) : "N/A"}</div>
+                      <div style={{ fontSize: 12, color: result.fin.niG > 0 ? T.green : result.fin.niG < 0 ? T.red : T.dim }}>{result.fin.niG != null ? pct(result.fin.niG) : "—"}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
                       <div style={{ fontSize: 11, color: T.muted }}>净利率</div>
                       <div style={{ fontSize: 18, fontWeight: 700 }}>{fixed(result.fin.nm, 1, "%")}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
-                      <div style={{ fontSize: 11, color: T.muted }}>经营现金流 {result.finSource === "live" && result.fin.operatingCF ? <Badge text="实时" color={T.green} /> : ""}</div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.ocf ? result.cur + fmt(result.fin.ocf) : "N/A"}</div>
+                      <div style={{ fontSize: 11, color: T.muted }}>经营利润率</div>
+                      <div style={{ fontSize: 18, fontWeight: 700 }}>{fixed(result.fin.operatingMargin, 1, "%")}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
-                      <div style={{ fontSize: 11, color: T.muted }}>自由现金流 {result.finSource === "live" && result.fin.freeCashFlow ? <Badge text="实时" color={T.green} /> : ""}</div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: (result.fin.freeCashFlow) > 0 ? T.green : T.red }}>{result.fin.freeCashFlow ? result.cur + fmt(result.fin.freeCashFlow) : "N/A"}</div>
+                      <div style={{ fontSize: 11, color: T.muted }}>经营现金流 {result.finSource === "live" && result.fin.operatingCF != null ? <Badge text="TTM" color={T.green} /> : ""}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.ocf != null ? result.cur + fmt(result.fin.ocf) : "N/A"}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
-                      <div style={{ fontSize: 11, color: T.muted }}>现金及等价物 {result.finSource === "live" && result.fin.cash ? <Badge text="实时" color={T.green} /> : ""}</div>
-                      <div style={{ fontSize: 18, fontWeight: 700, color: result.fin.cash > 0 ? T.green : T.red }}>{result.fin.cash ? result.cur + fmt(result.fin.cash) : "N/A"}</div>
+                      <div style={{ fontSize: 11, color: T.muted }}>自由现金流 {result.finSource === "live" && result.fin.freeCashFlow != null ? <Badge text="TTM" color={T.green} /> : ""}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: result.fin.freeCashFlow == null ? T.dim : result.fin.freeCashFlow > 0 ? T.green : T.red }}>{result.fin.freeCashFlow != null ? result.cur + fmt(result.fin.freeCashFlow) : "N/A"}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
-                      <div style={{ fontSize: 11, color: T.muted }}>总负债 {result.finSource === "live" && result.fin.totalDebt ? <Badge text="实时" color={T.green} /> : ""}</div>
-                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.totalDebt ? result.cur + fmt(result.fin.totalDebt) : "N/A"}</div>
+                      <div style={{ fontSize: 11, color: T.muted }}>现金及短期投资 {result.finSource === "live" && result.fin.cash != null ? <Badge text="最新季报" color={T.green} /> : ""}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: result.fin.cash > 0 ? T.green : result.fin.cash === 0 ? T.yellow : T.dim }}>{result.fin.cash != null ? result.cur + fmt(result.fin.cash) : "N/A"}</div>
                     </div>
                     <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
-                      <div style={{ fontSize: 11, color: T.muted }}>D/E 负债率 {result.finSource === "live" && result.fin.debtToEquity != null ? <Badge text="实时" color={T.green} /> : ""}</div>
+                      <div style={{ fontSize: 11, color: T.muted }}>总债务 {result.finSource === "live" && result.fin.totalDebt != null ? <Badge text="最新季报" color={T.green} /> : ""}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700 }}>{result.fin.totalDebt != null ? result.cur + fmt(result.fin.totalDebt) : "N/A"}</div>
+                    </div>
+                    <div style={{ background: T.cardAlt, padding: "10px 12px", borderRadius: 8 }}>
+                      <div style={{ fontSize: 11, color: T.muted }}>债务/权益 {result.finSource === "live" && result.fin.debtToEquity != null ? <Badge text="最新季报" color={T.green} /> : ""}</div>
                       <div style={{ fontSize: 18, fontWeight: 700, color: result.fin.debtToEquity != null ? (result.fin.debtToEquity > 100 ? T.red : result.fin.debtToEquity > 50 ? T.yellow : T.green) : T.text }}>
                         {result.fin.debtToEquity != null ? result.fin.debtToEquity.toFixed(1) + "%" : (result.fin.da ? (result.fin.da / Math.max(result.fin.rev, 1) * 100).toFixed(0) + "%" : "N/A")}
                       </div>
@@ -1495,8 +1519,8 @@ export default function StockAnalysisTool() {
                   <div style={{ marginTop: 8, fontSize: 11, color: T.dim }}>来源: FMP price-target-summary · 基于卖方分析师近1月/1季/1年共识 · 仅供参考</div>
                 </Card>
               )}
-              <Card>
-                <SectionTitle icon="&#x1F50D;">可比公司估值对比 <span style={{ fontSize: 11, color: T.muted, fontWeight: 400 }}>{result.finSource === "live" ? "标的PE/PB为实时数据" : "预设参考值"}，可比公司为静态预设</span></SectionTitle>
+              {result.peers.length > 0 && <Card>
+                <SectionTitle icon="&#x1F50D;">可比公司估值对比 <span style={{ fontSize: 11, color: T.muted, fontWeight: 400 }}>标的为最新披露，可比公司仅在有可验证数据时显示</span></SectionTitle>
                 <ResponsiveContainer width="100%" height={mob ? 170 : 220}>
                   <BarChart data={[{ n: result.ticker, pe: result.fin.fwdPE == null ? null : +result.fin.fwdPE.toFixed(1), pb: result.fin.pb }, ...result.peers.map(p => ({ ...p }))]} barGap={4}>
                     <CartesianGrid strokeDasharray="3 3" stroke={T.border} />
@@ -1508,7 +1532,7 @@ export default function StockAnalysisTool() {
                     <Bar dataKey="pb" name="PB" fill={T.purple} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
-              </Card>
+              </Card>}
             </div>
 
           {/* ═══ TECHNICAL ═══ */}
@@ -2056,7 +2080,7 @@ export default function StockAnalysisTool() {
               <div style={{ marginBottom: 16, padding: "12px 14px", background: T.cardAlt, borderRadius: 8, border: `1px solid ${T.border}` }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: T.text, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
                   &#x2696;&#xFE0F; 多空博弈分析
-                  <Badge text={`${result.dataSource === "live" ? "实时数据" : "演示数据"}驱动`} color={result.dataSource === "live" ? T.green : T.yellow} />
+                  <Badge text={`${result.dataSource === "live" ? "接口数据" : "演示数据"}驱动`} color={result.dataSource === "live" ? T.green : T.yellow} />
                 </div>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                   {/* Bull Case - Dynamic Evidence */}
@@ -2070,7 +2094,7 @@ export default function StockAnalysisTool() {
                       { t: "估值与增长", d: result.fin.fwdPE && result.fin.revG > 0
                         ? `Forward PE ${result.fin.fwdPE.toFixed(1)}x, 营收增速 ${result.fin.revG.toFixed(1)}%, PEG ${(result.fin.fwdPE / Math.max(result.fin.revG, 1)).toFixed(1)} — ${result.fin.fwdPE / Math.max(result.fin.revG, 1) < 1.5 ? "性价比优秀" : "估值合理"}`
                         : result.bulls[0]?.d || "估值水平具有吸引力",
-                        ev: result.finSource === "live" ? "高" : "中" },
+                        ev: result.finSource === "live" && result.fin.fwdPE != null && result.fin.revG != null ? "高" : "低" },
                       { t: "技术面动能", d: result.tech.rsi > 50 && result.tech.macd > result.tech.signal
                         ? `RSI ${result.tech.rsi.toFixed(0)} 偏强, MACD 金叉, ${result.price > result.tech.sma50 ? "站上50日均线" : "50日均线下方蓄势"}${result.tech.vwma && result.price > result.tech.vwma ? ", 量价确认" : ""}`
                         : result.bulls[2]?.d || "技术面存在反弹信号",
@@ -2100,7 +2124,7 @@ export default function StockAnalysisTool() {
                       (() => {
                         const srcCount = [result.dataSource === "live", result.finSource === "live", result.tech.isRealHistory, sentiment?.ok, macro?.ok, events?.ok].filter(Boolean).length;
                         const compEv = srcCount >= 5 ? "高" : srcCount >= 3 ? "中" : "低";
-                        return { t: "数据完整度", d: `实时行情: ${result.dataSource === "live" ? "✓" : "✗"}, 实时财务: ${result.finSource === "live" ? "✓" : "✗"}, 真实K线: ${result.tech.isRealHistory ? `${result.tech.historyLen}天` : "✗"}, 情绪: ${sentiment?.ok ? "✓" : "✗"}, 宏观: ${macro?.ok ? "✓" : "✗"}, 事件: ${events?.ok ? "✓" : "✗"}`, ev: compEv };
+                        return { t: "数据完整度", d: `行情快照: ${result.dataSource === "live" ? "有" : "无"}, 最新披露财务: ${result.finSource === "live" ? "有" : "无"}, 真实K线: ${result.tech.isRealHistory ? `${result.tech.historyLen}天` : "无"}, 情绪: ${sentiment?.ok ? "有" : "无"}, 宏观: ${macro?.ok ? "有" : "无"}, 事件: ${events?.ok ? "有" : "无"}`, ev: compEv };
                       })(),
                       { t: "技术面分歧", d: result.tech.signals.length >= 4
                         ? `${result.tech.signals.filter(s => s.color === T.green).length}多/${result.tech.signals.filter(s => s.color === T.red).length}空/${result.tech.signals.filter(s => s.color === T.yellow).length}中性 — 信号未完全一致, 需更多确认`

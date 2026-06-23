@@ -11,6 +11,56 @@ function average(values) {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+export function aggregateTtmIncome(rows) {
+  const quarters = (Array.isArray(rows) ? rows : [])
+    .filter((row) => row?.date)
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const sum = (group, key) => {
+    const values = group.map((row) => numberOrNull(row[key]));
+    return values.some((value) => value === null) ? null : values.reduce((total, value) => total + value, 0);
+  };
+  const sumEps = (group) => {
+    const values = group.map((row) => numberOrNull(row.epsDiluted ?? row.eps));
+    return values.some((value) => value === null) ? null : values.reduce((total, value) => total + value, 0);
+  };
+  const makePeriod = (group) => {
+    if (group.length < 4) return null;
+    return {
+      revenue: sum(group, "revenue"),
+      netIncome: sum(group, "netIncome"),
+      grossProfit: sum(group, "grossProfit"),
+      operatingIncome: sum(group, "operatingIncome"),
+      eps: sumEps(group),
+      date: group[0].date
+    };
+  };
+  return {
+    current: makePeriod(quarters.slice(0, 4)),
+    prior: makePeriod(quarters.slice(4, 8))
+  };
+}
+
+export function nextFiscalYearEstimate(estimates, latestAnnualFiscalDate, today = new Date()) {
+  const fiscalEnd = new Date(`${latestAnnualFiscalDate}T00:00:00Z`);
+  const now = new Date(today);
+  if (!Number.isFinite(fiscalEnd.getTime()) || !Number.isFinite(now.getTime())) return null;
+  const currentFiscalEnd = new Date(fiscalEnd);
+  while (currentFiscalEnd <= now) currentFiscalEnd.setUTCFullYear(currentFiscalEnd.getUTCFullYear() + 1);
+  const target = new Date(currentFiscalEnd);
+  target.setUTCFullYear(target.getUTCFullYear() + 1);
+  const candidates = (Array.isArray(estimates) ? estimates : [])
+    .filter((row) => row?.date && numberOrNull(row.estimatedEpsAvg ?? row.epsAvg) !== null)
+    .map((row) => ({ row, distance: Math.abs(new Date(`${row.date}T00:00:00Z`) - target) }))
+    .filter(({ distance }) => Number.isFinite(distance) && distance <= 120 * 86400000)
+    .sort((a, b) => a.distance - b.distance);
+  if (!candidates[0]) return null;
+  return {
+    ...candidates[0].row,
+    horizonDays: Math.round((new Date(`${candidates[0].row.date}T00:00:00Z`) - now) / 86400000),
+    estimateType: "next-fiscal-year"
+  };
+}
+
 function ema(values, period) {
   if (values.length < period) return [];
   const output = new Array(period - 1).fill(null);
@@ -26,16 +76,22 @@ function ema(values, period) {
 
 function latestRsi(values, period = 14) {
   if (values.length <= period) return null;
-  const recent = values.slice(-(period + 1));
   let gains = 0;
   let losses = 0;
-  for (let index = 1; index < recent.length; index += 1) {
-    const change = recent[index] - recent[index - 1];
+  for (let index = 1; index <= period; index += 1) {
+    const change = values[index] - values[index - 1];
     if (change >= 0) gains += change;
     else losses += Math.abs(change);
   }
-  if (losses === 0) return 100;
-  const relativeStrength = gains / losses;
+  let averageGain = gains / period;
+  let averageLoss = losses / period;
+  for (let index = period + 1; index < values.length; index += 1) {
+    const change = values[index] - values[index - 1];
+    averageGain = (averageGain * (period - 1) + Math.max(change, 0)) / period;
+    averageLoss = (averageLoss * (period - 1) + Math.max(-change, 0)) / period;
+  }
+  if (averageLoss === 0) return 100;
+  const relativeStrength = averageGain / averageLoss;
   return 100 - 100 / (1 + relativeStrength);
 }
 
@@ -188,6 +244,7 @@ function fundamentalScore(metrics) {
   const fwdPe = numberOrNull(metrics.fwdPe);
   const revenueGrowth = numberOrNull(metrics.revenueGrowth);
   const netIncomeGrowth = numberOrNull(metrics.netIncomeGrowth);
+  const netIncome = numberOrNull(metrics.netIncome);
   const roe = numberOrNull(metrics.roe);
   const grossMargin = numberOrNull(metrics.grossMargin);
 
@@ -205,9 +262,11 @@ function fundamentalScore(metrics) {
   }
   if (netIncomeGrowth !== null) {
     available += 1;
-    const points = netIncomeGrowth > 30 ? 10 : netIncomeGrowth > 0 ? 5 : -10;
+    const points = netIncome !== null && netIncome <= 0
+      ? (netIncomeGrowth > 0 ? 0 : -10)
+      : netIncomeGrowth > 30 ? 10 : netIncomeGrowth > 0 ? 5 : -10;
     score += points;
-    details.push({ metric: "净利润增速", value: netIncomeGrowth, points });
+    details.push({ metric: "净利润增速", value: netIncomeGrowth, points, profitable: netIncome === null ? null : netIncome > 0 });
   }
   if (roe !== null) {
     available += 1;
@@ -341,7 +400,7 @@ export function scoreRating({ fundamentals = {}, technical = {}, expectation = {
       sentiment: expectationResult
     },
     metricCompleteness: confidence,
-    modelVersion: "2026-06-22-v5"
+    modelVersion: "2026-06-23-v6"
   };
 }
 
